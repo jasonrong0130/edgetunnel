@@ -78,7 +78,7 @@ async function 注入ProxyIP后台入口(response) {
 
 		const injected = String.raw`
 <style data-custom-proxyip-ui="1">
-#proxyIpNodeBtn.proxyip-node-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important;box-shadow:0 4px 15px rgba(220,38,38,.34)!important}
+#proxyIpNodeBtn.proxyip-node-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important;box-shadow:0 4px 15px rgba(220,38,38,.40)!important;padding:10px 20px!important;font-size:17px!important;font-weight:600!important;line-height:19px!important;letter-spacing:.5px!important;border-radius:12px!important;box-sizing:border-box!important}
 #proxyIpNodeBtn.proxyip-node-btn:hover{box-shadow:0 6px 22px rgba(220,38,38,.44)!important;filter:brightness(1.03)}
 #proxyIpNodeModal .proxyip-save-hint{margin:4px 0 0;color:#6b7280;font-size:13px;line-height:1.55}
 #proxyIpNodeModal .proxyip-address-wrap{display:flex;align-items:center;gap:8px;width:100%}
