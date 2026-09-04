@@ -1,0 +1,46 @@
+name: Fix ProxyIP admin injection
+
+on:
+  push:
+    branches:
+      - candidate/force-proxyip
+    paths:
+      - .github/workflows/fix-proxyip-admin-injection.yml
+      - .github/scripts/fix_proxyip_admin_injection.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch admin injection fallback
+        run: python3 .github/scripts/fix_proxyip_admin_injection.py
+
+      - name: Validate worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check _worker.js
+          git diff --check
+          grep -Fq "后续 ensureButton() 会按 chainProxyBtn 动态插入 PROXYIP 按钮" _worker.js
+          grep -Fq "function ensureButton()" _worker.js
+          grep -Fq "id = \"proxyIpNodeBtn\"" _worker.js
+
+      - name: Commit fix and cleanup helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+          git commit -m 'fix: make ProxyIP admin button injection resilient'
+          git rm .github/workflows/fix-proxyip-admin-injection.yml .github/scripts/fix_proxyip_admin_injection.py
+          git commit -m 'chore: remove temporary admin injection fix helpers'
+          git push origin candidate/force-proxyip
