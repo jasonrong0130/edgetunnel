@@ -61,15 +61,13 @@ function 规范化优选节点主机(value) {
 async function 注入ProxyIP后台入口(response) {
 	try {
 		const html = await response.text();
-		if (html.includes('id="proxyIpNodeBtn"') || !html.includes('id="chainProxyBtn"')) {
+		if (html.includes('data-custom-proxyip-ui="1"')) {
 			const headers = new Headers(response.headers);
 			headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
 			return new Response(html, { status: response.status, statusText: response.statusText, headers });
 		}
 
-		const proxyButton = '<button type="button" class="btn btn-chain-proxy hidden-section proxyip-node-btn" id="proxyIpNodeBtn" onclick="openProxyIpModal()">ProxyIP节点</button>';
-		const chainButtonPattern = /(<button\s+type="button"\s+class="btn btn-chain-proxy hidden-section"\s+id="chainProxyBtn"[\s\S]*?<\/button>)/i;
-		let body = html.replace(chainButtonPattern, '$1\n\t\t\t\t\t\t' + proxyButton);
+		let body = html;
 
 		const injected = String.raw`
 <style data-custom-proxyip-ui="1">
@@ -133,9 +131,24 @@ async function 注入ProxyIP后台入口(response) {
 		if (!v || v.includes('://') || /[\s/#$]/.test(v)) throw new Error('ProxyIP 格式无效');
 		return v;
 	}
+	function ensureButton(){
+		const source = document.getElementById('chainProxyBtn');
+		if (!source) return null;
+		let btn = document.getElementById('proxyIpNodeBtn');
+		if (!btn) {
+			btn = document.createElement('button');
+			btn.type = 'button';
+			btn.className = 'btn btn-chain-proxy hidden-section proxyip-node-btn';
+			btn.id = 'proxyIpNodeBtn';
+			btn.textContent = 'ProxyIP节点';
+			btn.addEventListener('click', function(){ window.openProxyIpModal(); });
+			source.insertAdjacentElement('afterend', btn);
+		}
+		return btn;
+	}
 	function syncButton(){
 		const source = document.getElementById('chainProxyBtn');
-		const btn = document.getElementById('proxyIpNodeBtn');
+		const btn = ensureButton();
 		if (!source || !btn) return;
 		btn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));
 		btn.style.display = source.style.display || '';
@@ -233,6 +246,7 @@ async function 注入ProxyIP后台入口(response) {
 	};
 
 	const chainBtn = document.getElementById('chainProxyBtn');
+	ensureButton();
 	if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
 	document.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
 	window.addEventListener('resize', syncButton);
