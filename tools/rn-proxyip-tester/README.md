@@ -96,3 +96,10 @@ sudo grep PROXY_TESTER_TOKEN /etc/rn-proxyip-tester.env
 - 单次测速最大 50 MiB
 
 以后接 EDT2 时，建议用 Caddy 给 RN 单独开 HTTPS 域名，并继续保留独立 API Token。
+
+
+## 成熟扫描控制台
+
+前台首页 `/` 已升级为完整批量扫描控制台：批量导入/去重、快速/均衡/深度预设、双阶段实时进度、速率和 ETA、任务停止、最近任务恢复、地区/状态/速度筛选、100 行分页、TOP 20 高速节点、当前筛选 TXT/CSV 导出、复制可用节点，以及测速流量预估。
+
+测速采用“先筛选、后测速”策略。`speed.limit` 可限制仅对 TCP 延迟最优的前 N 个可用节点测速；0 表示全部可用节点。任务可通过 `POST /api/jobs/{job_id}/cancel` 请求停止，最近 30 个任务可通过 `GET /api/jobs` 查看。

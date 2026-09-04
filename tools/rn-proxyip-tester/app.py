@@ -327,9 +327,16 @@ async def run_job(job):
         for raw in targets
     ]
     index_by_target = {raw: idx for idx, raw in enumerate(targets)}
+    job["state"] = "checking"
+    job["started_at"] = time.time()
+    persist_job(job)
 
     async def wrapped_check(raw):
+        if job.get("cancel_requested"):
+            return
         async with check_sem:
+            if job.get("cancel_requested"):
+                return
             idx = index_by_target[raw]
             job["results"][idx]["state"] = "checking"
             result = await test_one(raw, settings["generic_test"], settings["timeout"])
@@ -338,24 +345,47 @@ async def run_job(job):
             job["completed"] += 1
             if result.get("available"):
                 job["available"] += 1
+            if result.get("generic_ok") is True:
+                job["generic_available"] += 1
             if result.get("exit_match") == "same":
                 job["same_exit"] += 1
 
-    job["state"] = "checking"
-    await asyncio.gather(*(wrapped_check(raw) for raw in targets))
-    ordered = job["results"]
+    tasks = [asyncio.create_task(wrapped_check(raw)) for raw in targets]
+    await asyncio.gather(*tasks, return_exceptions=True)
 
+    if job.get("cancel_requested"):
+        for row in job["results"]:
+            if row.get("state") in ("pending", "checking"):
+                row["state"] = "cancelled"
+        job["state"] = "cancelled"
+        job["finished_at"] = time.time()
+        persist_job(job)
+        return
+
+    ordered = job["results"]
     speed_cfg = settings["speed"]
     if speed_cfg["enabled"]:
         speed_targets = [r for r in ordered if r.get("available")]
+        speed_targets.sort(key=lambda r: (r.get("tcp_ms") is None, r.get("tcp_ms") or 10**9))
+        if speed_cfg.get("limit", 0) > 0:
+            speed_targets = speed_targets[:speed_cfg["limit"]]
         job["speed_total"] = len(speed_targets)
         job["state"] = "speeding"
+        job["speed_started_at"] = time.time()
+        persist_job(job)
         speed_sem = asyncio.Semaphore(speed_cfg["concurrency"])
 
         async def wrapped_speed(result):
+            if job.get("cancel_requested"):
+                return
             async with speed_sem:
+                if job.get("cancel_requested"):
+                    return
+                result["state"] = "speeding"
                 runs = []
                 for _ in range(speed_cfg["repeats"]):
+                    if job.get("cancel_requested"):
+                        break
                     runs.append(await speed_test(result["host"], result["port"], speed_cfg["bytes"], max(settings["timeout"], 15.0)))
                 good = [r["mbps"] for r in runs if r.get("ok") and isinstance(r.get("mbps"), (int, float))]
                 result["speed_runs"] = runs
@@ -363,11 +393,21 @@ async def run_job(job):
                 result["speed_mbps_avg"] = round(sum(good) / len(good), 2) if good else None
                 result["speed_mbps_min"] = round(min(good), 2) if good else None
                 result["speed_mbps_max"] = round(max(good), 2) if good else None
+                result["state"] = "done" if not job.get("cancel_requested") else "cancelled"
                 job["speed_completed"] += 1
+                if result.get("speed_mbps_avg") is not None and result["speed_mbps_avg"] >= 100:
+                    job["high_speed"] += 1
 
-        await asyncio.gather(*(wrapped_speed(r) for r in speed_targets))
+        speed_tasks = [asyncio.create_task(wrapped_speed(r)) for r in speed_targets]
+        await asyncio.gather(*speed_tasks, return_exceptions=True)
 
-    job["state"] = "done"
+    if job.get("cancel_requested"):
+        job["state"] = "cancelled"
+    else:
+        job["state"] = "done"
+        for row in job["results"]:
+            if row.get("state") == "checked":
+                row["state"] = "done"
     job["finished_at"] = time.time()
     persist_job(job)
 
@@ -434,6 +474,48 @@ async def health():
     return {"ok": True, "jobs": len(JOBS), "token_configured": bool(TOKEN)}
 
 
+@app.get("/api/jobs")
+async def list_jobs(authorization: Optional[str] = Header(None), x_api_token: Optional[str] = Header(None)):
+    require_token(authorization, x_api_token)
+    snapshots = {}
+    for job_id, job in JOBS.items():
+        snapshots[job_id] = job
+    for path in DATA_DIR.glob("*.json"):
+        if path.stem in snapshots:
+            continue
+        try:
+            snapshots[path.stem] = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    rows = []
+    for job in snapshots.values():
+        rows.append({
+            "id": job.get("id"), "state": job.get("state"), "created_at": job.get("created_at"),
+            "finished_at": job.get("finished_at"), "total": job.get("total", 0),
+            "completed": job.get("completed", 0), "available": job.get("available", 0),
+            "same_exit": job.get("same_exit", 0), "speed_completed": job.get("speed_completed", 0),
+            "high_speed": job.get("high_speed", 0),
+        })
+    rows.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return {"jobs": rows[:30]}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, authorization: Optional[str] = Header(None), x_api_token: Optional[str] = Header(None)):
+    require_token(authorization, x_api_token)
+    job = JOBS.get(job_id)
+    if not job:
+        job = load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.get("state") in ("done", "cancelled"):
+        return {"id": job_id, "state": job.get("state"), "cancel_requested": False}
+    job["cancel_requested"] = True
+    JOBS[job_id] = job
+    persist_job(job)
+    return {"id": job_id, "state": job.get("state"), "cancel_requested": True}
+
+
 @app.post("/api/jobs")
 async def create_job(request: Request, authorization: Optional[str] = Header(None), x_api_token: Optional[str] = Header(None)):
     require_token(authorization, x_api_token)
@@ -449,13 +531,15 @@ async def create_job(request: Request, authorization: Optional[str] = Header(Non
             "concurrency": clamp_int(speed.get("concurrency"), DEFAULT_SPEED_CONCURRENCY, 1, 10),
             "bytes": clamp_int(speed.get("bytes"), DEFAULT_SPEED_BYTES, 1024 * 1024, 50 * 1024 * 1024),
             "repeats": clamp_int(speed.get("repeats"), DEFAULT_SPEED_REPEATS, 1, 5),
+            "limit": clamp_int(speed.get("limit"), 0, 0, MAX_TARGETS),
         },
     }
     job_id = uuid.uuid4().hex[:12]
     job = {
-        "id": job_id, "state": "queued", "created_at": time.time(), "finished_at": None,
-        "total": len(targets), "completed": 0, "available": 0, "same_exit": 0,
-        "speed_total": 0, "speed_completed": 0, "settings": settings,
+        "id": job_id, "state": "queued", "created_at": time.time(), "started_at": None,
+        "speed_started_at": None, "finished_at": None, "cancel_requested": False,
+        "total": len(targets), "completed": 0, "available": 0, "generic_available": 0, "same_exit": 0,
+        "speed_total": 0, "speed_completed": 0, "high_speed": 0, "settings": settings,
         "targets": targets, "results": [],
     }
     JOBS[job_id] = job
