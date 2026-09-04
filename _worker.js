@@ -1,4 +1,4 @@
-﻿const Version = '2026-08-11 14:45:22';
+const Version = '2026-08-11 14:45:22';
 let config_JSON, 缓存SOCKS5白名单 = null, 调试日志打印 = false;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
 const Pages静态页面 = 'https://edt-pages.github.io';
@@ -7,6 +7,144 @@ const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Mat
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
 let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+const 自定义ProxyIP节点KV键 = 'proxyip-nodes.json';
+
+async function 读取自定义ProxyIP节点映射(env) {
+	try {
+		const raw = await env.KV.get(自定义ProxyIP节点KV键);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return {};
+		const clean = {};
+		for (const [line, proxyip] of Object.entries(parsed)) {
+			if (typeof line !== 'string' || typeof proxyip !== 'string') continue;
+			const key = line.trim(), value = proxyip.trim();
+			if (key && value) clean[key] = value;
+		}
+		return clean;
+	} catch (error) {
+		log(`[ProxyIP节点] 读取隐藏映射失败: ${error?.message || error}`);
+		return {};
+	}
+}
+
+function 规范化ProxyIP端点(value) {
+	const input = String(value || '').trim();
+	if (!input || input.includes('://') || /[\s/#$]/.test(input)) throw new Error('ProxyIP 格式无效');
+	let parsed;
+	try { parsed = new URL('https://' + input) }
+	catch (_) { throw new Error('ProxyIP 格式无效，请填写 IP/域名:端口') }
+	if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') throw new Error('ProxyIP 格式无效');
+	let hostname = parsed.hostname;
+	if (!hostname) throw new Error('ProxyIP 主机不能为空');
+	if (hostname.includes(':') && !hostname.startsWith('[')) hostname = `[${hostname}]`;
+	const port = parsed.port ? Number(parsed.port) : 443;
+	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ProxyIP 端口必须为 1~65535');
+	return `${hostname}:${port}`;
+}
+
+function 规范化优选节点主机(value) {
+	let host = String(value || '').trim();
+	if (!host || host.includes('://') || /[\s/#$]/.test(host)) throw new Error('优选域名/IP 格式无效');
+	if (host.startsWith('[') && host.endsWith(']')) {
+		if (!/^\[[0-9a-fA-F:]+\]$/.test(host)) throw new Error('IPv6 地址格式无效');
+		return host;
+	}
+	if (host.includes(':')) {
+		if (!/^[0-9a-fA-F:]+$/.test(host)) throw new Error('优选域名/IP 格式无效');
+		return `[${host}]`;
+	}
+	if (!/^[a-zA-Z0-9.-]+$/.test(host)) throw new Error('优选域名/IP 格式无效');
+	return host;
+}
+
+function 生成ProxyIP节点管理页() {
+	return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ProxyIP 节点</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f7fb;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:860px;margin:32px auto;padding:0 18px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:24px;box-shadow:0 8px 30px rgba(0,0,0,.05);margin-bottom:18px}h1{margin:0 0 8px;font-size:26px}p{color:#6b7280;line-height:1.65;margin:8px 0 20px}.grid{display:grid;grid-template-columns:1fr 140px;gap:14px}.full{grid-column:1/-1}label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}input{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:12px 13px;font-size:15px;outline:none}input:focus{border-color:#f6821f;box-shadow:0 0 0 3px rgba(246,130,31,.12)}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}button,.back{border:0;border-radius:10px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none}.primary{background:#f6821f;color:#fff}.back{background:#eef0f4;color:#374151}.status{margin-top:14px;font-size:14px;min-height:20px}.node{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:center;padding:12px 0;border-top:1px solid #eee}.node:first-child{border-top:0}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;word-break:break-all}.del{background:#fee2e2;color:#991b1b;padding:8px 10px}.empty{color:#9ca3af;padding:10px 0}@media(max-width:650px){.grid,.node{grid-template-columns:1fr}.node .del{width:max-content}}
+</style>
+</head>
+<body><div class="wrap">
+<div class="card">
+<h1>添加 ProxyIP 节点</h1>
+<p>这里只追加你指定 ProxyIP 的特殊节点。原有订阅节点和原版自动 ProxyIP 逻辑保持不变；订阅备注只显示你填写的内容，不会出现内部 ProxyIP 参数。</p>
+<div class="grid">
+<div class="full"><label>节点备注（# 后显示内容）</label><input id="remark" placeholder="例如：香港高速"></div>
+<div><label>优选域名 / IP</label><input id="preferredHost" placeholder="例如：103.26.8.38"></div>
+<div><label>优选端口</label><input id="preferredPort" value="443" inputmode="numeric"></div>
+<div class="full"><label>ProxyIP</label><input id="proxyip" placeholder="例如：45.196.234.118:443"></div>
+</div>
+<div class="actions"><button id="addBtn" class="primary">添加到自定义优选</button><a class="back" href="/admin">返回后台</a></div>
+<div id="status" class="status"></div>
+</div>
+<div class="card"><h1 style="font-size:20px">已添加的 ProxyIP 节点</h1><div id="nodes"><div class="empty">加载中...</div></div></div>
+</div>
+<script>
+(function(){
+ const $=function(id){return document.getElementById(id)};
+ const status=$('status'), nodes=$('nodes'), addBtn=$('addBtn');
+ function setStatus(msg,ok){status.textContent=msg;status.style.color=ok?'#047857':'#b91c1c'}
+ async function load(){
+  try{
+   const r=await fetch('/admin/proxyip-nodes.json?_t='+Date.now(),{cache:'no-store'}); const d=await r.json();
+   nodes.textContent=''; const list=Array.isArray(d.nodes)?d.nodes:[];
+   if(!list.length){const e=document.createElement('div');e.className='empty';e.textContent='暂无自定义 ProxyIP 节点';nodes.appendChild(e);return}
+   list.forEach(function(item){
+    const row=document.createElement('div');row.className='node';
+    const a=document.createElement('div');a.className='mono';a.textContent=item.line;
+    const b=document.createElement('div');b.className='mono';b.textContent='ProxyIP → '+item.proxyip;
+    const c=document.createElement('button');c.className='del';c.textContent='删除';
+    c.onclick=async function(){
+     c.disabled=true;
+     try{const r=await fetch('/admin/proxyip-node/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({line:item.line})});const d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'删除失败');setStatus('已删除：'+item.line,true);await load()}catch(e){setStatus(e.message||String(e),false);c.disabled=false}
+    };
+    row.append(a,b,c);nodes.appendChild(row);
+   });
+  }catch(e){nodes.textContent='加载失败：'+(e.message||String(e))}
+ }
+ addBtn.onclick=async function(){
+  const payload={remark:$('remark').value,preferredHost:$('preferredHost').value,preferredPort:$('preferredPort').value,proxyip:$('proxyip').value};
+  addBtn.disabled=true;setStatus('正在添加...',true);
+  try{const r=await fetch('/admin/proxyip-node',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'添加失败');setStatus('已添加：'+d.line+' → '+d.proxyip,true);$('remark').value='';$('proxyip').value='';await load()}catch(e){setStatus(e.message||String(e),false)}finally{addBtn.disabled=false}
+ };
+ load();
+})();
+</script></body></html>`;
+}
+
+async function 注入ProxyIP后台入口(response) {
+	try {
+		const html = await response.text();
+		const marker = 'data-custom-proxyip-entry="1"';
+		if (html.includes(marker)) return new Response(html, { status: response.status, statusText: response.statusText, headers: response.headers });
+		const entry = `<script ${marker}>
+(function(){
+ function install(){
+  if(document.getElementById('proxyIpNodeBtn'))return;
+  var chain=document.getElementById('chainProxyBtn');
+  if(!chain)return;
+  var btn=document.createElement('button');
+  btn.type='button';btn.id='proxyIpNodeBtn';btn.className='btn btn-chain-proxy';btn.textContent='ProxyIP节点';
+  btn.onclick=function(){location.href='/admin/proxyip'};
+  chain.insertAdjacentElement('afterend',btn);
+ }
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
+})();
+</script>`;
+		const body = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, entry + '</body>') : html + entry;
+		const headers = new Headers(response.headers);
+		headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
+		return new Response(body, { status: response.status, statusText: response.statusText, headers });
+	} catch (error) {
+		log(`[ProxyIP节点] 后台入口注入失败: ${error?.message || error}`);
+		return response;
+	}
+}
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -204,6 +342,53 @@ export default {
 						return new Response(JSON.stringify(检测代理响应, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 					}
 
+					if (访问路径 === 'admin/proxyip' && request.method === 'GET') {
+						return new Response(生成ProxyIP节点管理页(), { status: 200, headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' } });
+					} else if (访问路径 === 'admin/proxyip-nodes.json' && request.method === 'GET') {
+						const 节点映射 = await 读取自定义ProxyIP节点映射(env);
+						const nodes = Object.entries(节点映射).map(([line, proxyip]) => ({ line, proxyip }));
+						return new Response(JSON.stringify({ success: true, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
+					} else if (访问路径 === 'admin/proxyip-node' && request.method === 'POST') {
+						try {
+							const body = await request.json();
+							const remark = String(body?.remark || '').replace(/[\r\n]+/g, ' ').trim();
+							if (!remark) throw new Error('节点备注不能为空');
+							if (remark.length > 120) throw new Error('节点备注不能超过 120 个字符');
+							const preferredHost = 规范化优选节点主机(body?.preferredHost);
+							const preferredPort = Number(body?.preferredPort || 443);
+							if (!Number.isInteger(preferredPort) || preferredPort < 1 || preferredPort > 65535) throw new Error('优选端口必须为 1~65535');
+							const proxyip = 规范化ProxyIP端点(body?.proxyip);
+							const line = `${preferredHost}:${preferredPort}#${remark}`;
+							const 节点映射 = await 读取自定义ProxyIP节点映射(env);
+							节点映射[line] = proxyip;
+							await env.KV.put(自定义ProxyIP节点KV键, JSON.stringify(节点映射, null, 2));
+							const 当前ADD = await env.KV.get('ADD.txt') || '';
+							const lines = 当前ADD.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+							if (!lines.includes(line)) lines.push(line);
+							await env.KV.put('ADD.txt', lines.join('\n'));
+							ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Save_Custom_ProxyIP_Node', config_JSON));
+							return new Response(JSON.stringify({ success: true, line, proxyip }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+						} catch (error) {
+							return new Response(JSON.stringify({ success: false, error: error?.message || String(error) }), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+						}
+					} else if (访问路径 === 'admin/proxyip-node/delete' && request.method === 'POST') {
+						try {
+							const body = await request.json();
+							const line = String(body?.line || '').trim();
+							if (!line) throw new Error('缺少节点标识');
+							const 节点映射 = await 读取自定义ProxyIP节点映射(env);
+							delete 节点映射[line];
+							await env.KV.put(自定义ProxyIP节点KV键, JSON.stringify(节点映射, null, 2));
+							const 当前ADD = await env.KV.get('ADD.txt') || '';
+							const lines = 当前ADD.split(/\r?\n/).map(v => v.trim()).filter(v => v && v !== line);
+							await env.KV.put('ADD.txt', lines.join('\n'));
+							ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Delete_Custom_ProxyIP_Node', config_JSON));
+							return new Response(JSON.stringify({ success: true }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+						} catch (error) {
+							return new Response(JSON.stringify({ success: false, error: error?.message || String(error) }), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+						}
+					}
+
 					config_JSON = await 读取config_JSON(env, host, userID, UA);
 
 					if (访问路径 === 'admin/init') {// 重置配置为默认值
@@ -277,6 +462,13 @@ export default {
 							try {
 								const customIPs = await request.text();
 								await env.KV.put('ADD.txt', customIPs);// 保存到 KV
+								try {
+									const 节点映射 = await 读取自定义ProxyIP节点映射(env);
+									const 当前行集合 = new Set(customIPs.split(/\r?\n/).map(v => v.trim()).filter(Boolean));
+									let changed = false;
+									for (const line of Object.keys(节点映射)) if (!当前行集合.has(line)) { delete 节点映射[line]; changed = true; }
+									if (changed) await env.KV.put(自定义ProxyIP节点KV键, JSON.stringify(节点映射, null, 2));
+								} catch (error) { log(`[ProxyIP节点] 清理隐藏映射失败: ${error?.message || error}`) }
 								ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Save_Custom_IPs', config_JSON));
 								return new Response(JSON.stringify({ success: true, message: '自定义IP已保存' }), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 							} catch (error) {
@@ -295,7 +487,8 @@ export default {
 					}
 
 					ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Admin_Login', config_JSON));
-					return fetch(Pages静态页面 + '/admin' + url.search);
+					const 后台页面响应 = await fetch(Pages静态页面 + '/admin' + url.search);
+					return await 注入ProxyIP后台入口(后台页面响应);
 				} else if (访问路径 === 'logout' || uuidRegex.test(访问路径)) {//清除cookie并跳转到登录页面
 					const 响应 = new Response('重定向中...', { status: 302, headers: { 'Location': '/login' } });
 					响应.headers.set('Set-Cookie', 'auth=; Path=/; Max-Age=0; HttpOnly');
@@ -348,6 +541,7 @@ export default {
 						if (!ua.includes('mozilla')) responseHeaders["Content-Disposition"] = `attachment; filename*=utf-8''${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`;
 						const 协议类型 = ((url.searchParams.has('surge') || ua.includes('surge')) && config_JSON.协议类型 !== 'ss') ? 'tro' + 'jan' : config_JSON.协议类型;
 						let 订阅内容 = '';
+						const 自定义ProxyIP节点映射 = await 读取自定义ProxyIP节点映射(env);
 						if (订阅类型 === 'mixed') {
 							const TLS分片参数 = config_JSON.TLS分片 == 'Shadowrocket' ? `&fragment=${encodeURIComponent('1,40-60,30-50,tlshello')}` : config_JSON.TLS分片 == 'Happ' ? `&fragment=${encodeURIComponent('3,1,tlshello')}` : '';
 							let 完整优选IP = [], 其他节点LINK = '', 反代IP池 = [];
@@ -423,23 +617,28 @@ export default {
 
 								let 完整节点路径 = config_JSON.完整节点路径;
 
-								const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp|proxyip):\/\/([^#\s]+)/i);
-								if (链式代理匹配) {
-									try {
-										const 代理协议 = 链式代理匹配[1].toLowerCase(), 代理参数 = 链式代理匹配[2];
-										if (代理协议 === 'proxyip') {
-											完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${代理参数}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
-										} else {
-											const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
-											完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;
+								const 隐藏自定义ProxyIP = 自定义ProxyIP节点映射[String(原始地址).trim()] || '';
+								if (隐藏自定义ProxyIP) {
+									完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${隐藏自定义ProxyIP}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
+								} else {
+									const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp|proxyip):\/\/([^#\s]+)/i);
+									if (链式代理匹配) {
+										try {
+											const 代理协议 = 链式代理匹配[1].toLowerCase(), 代理参数 = 链式代理匹配[2];
+											if (代理协议 === 'proxyip') {
+												完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${代理参数}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
+											} else {
+												const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
+												完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;
+											}
+											节点备注 = 节点备注.replace(链式代理匹配[0], '').trim() || 节点地址;
+										} catch (error) {
+											console.warn(`[订阅内容] 链式代理解析失败，已忽略该指令: ${链式代理匹配[0]} (${error && error.message ? error.message : error})`);
 										}
-										节点备注 = 节点备注.replace(链式代理匹配[0], '').trim() || 节点地址;
-									} catch (error) {
-										console.warn(`[订阅内容] 链式代理解析失败，已忽略该指令: ${链式代理匹配[0]} (${error && error.message ? error.message : error})`);
+									} else if (反代IP池.length > 0) {
+										const 匹配到的反代IP = 反代IP池.find(p => p.includes(节点地址));
+										if (匹配到的反代IP) 完整节点路径 = (`${config_JSON.PATH}/proxyip=${匹配到的反代IP}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
 									}
-								} else if (反代IP池.length > 0) {
-									const 匹配到的反代IP = 反代IP池.find(p => p.includes(节点地址));
-									if (匹配到的反代IP) 完整节点路径 = (`${config_JSON.PATH}/proxyip=${匹配到的反代IP}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
 								}
 								if (isLoonOrSurge) 完整节点路径 = 完整节点路径.replace(/,/g, '%2C');
 
