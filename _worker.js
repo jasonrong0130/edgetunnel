@@ -73,10 +73,10 @@ async function 检测ProxyIP可用性(request, proxyValue) {
 	try {
 		tcpSocket = TCP连接({ hostname, port });
 		if (tcpSocket.opened) await withTimeout(tcpSocket.opened, 5000, 'ProxyIP TCP连接超时');
-		tlsSocket = new TlsClient(tcpSocket, { serverName: 'cloudflare.com', insecure: true });
+		tlsSocket = new TlsClient(tcpSocket, { serverName: 'ifconfig.me', insecure: true });
 		await withTimeout(tlsSocket.handshake(), 6000, 'ProxyIP TLS握手超时');
 		const encoder = new TextEncoder(), decoder = new TextDecoder();
-		await withTimeout(tlsSocket.write(encoder.encode('GET /cdn-cgi/trace HTTP/1.1\r\nHost: cloudflare.com\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n')), 5000, 'ProxyIP检测请求写入超时');
+		await withTimeout(tlsSocket.write(encoder.encode('GET /ip HTTP/1.1\r\nHost: ifconfig.me\r\nUser-Agent: Mozilla/5.0\r\nAccept: text/plain\r\nConnection: close\r\n\r\n')), 5000, 'ProxyIP检测请求写入超时');
 		let responseBuffer = new Uint8Array(0);
 		const deadline = Date.now() + 8000, maxBytes = 64 * 1024;
 		while (Date.now() < deadline && responseBuffer.length < maxBytes) {
@@ -97,9 +97,10 @@ async function 检测ProxyIP可用性(request, proxyValue) {
 		const statusMatch = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
 		const statusCode = statusMatch ? Number(statusMatch[1]) : NaN;
 		if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode >= 300) throw new Error('ProxyIP检测请求失败: ' + (statusLine || '无效响应'));
-		const ip = responseText.match(/(?:^|\n)ip=([^\r\n]+)/m)?.[1]?.trim();
-		const loc = responseText.match(/(?:^|\n)loc=([^\r\n]+)/m)?.[1]?.trim() || '';
-		const colo = responseText.match(/(?:^|\n)colo=([^\r\n]+)/m)?.[1]?.trim() || '';
+		const bodyText = responseText.slice(responseText.indexOf('\r\n\r\n') + 4).trim();
+		const ip = bodyText.match(/(?:\d{1,3}\.){3}\d{1,3}/)?.[0] || bodyText.match(/[0-9a-fA-F]{0,4}:[0-9a-fA-F:]+/)?.[0] || '';
+		const loc = '';
+		const colo = '';
 		if (!ip) throw new Error('ProxyIP检测响应中未找到出口IP');
 		return { success: true, proxyip: endpoint, ip, loc, colo, latency: Date.now() - startTime };
 	} finally {
