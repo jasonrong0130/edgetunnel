@@ -85,10 +85,6 @@ async function 注入ProxyIP后台入口(response) {
 #proxyIpNodeModal .proxyip-address-wrap input{flex:1;min-width:0}
 #proxyIpNodeModal .proxyip-prefix{color:#6b7280;font-weight:600;white-space:nowrap}
 #proxyIpNodeModal .proxyip-add-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important}
-#proxyIpNodeStatus{display:none;margin:8px 0 20px;padding:14px 16px;border-radius:8px;color:#fff;font-size:14px;line-height:1.5}
-#proxyIpNodeStatus.checking{display:block;background:linear-gradient(135deg,#3b82f6 0%,#1d4ed8 100%)}
-#proxyIpNodeStatus.success{display:block;background:linear-gradient(135deg,#10b981 0%,#059669 100%)}
-#proxyIpNodeStatus.error{display:block;background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)}
 </style>
 <div class="modal-overlay" id="proxyIpNodeModal" onclick="if(event.target===this) closeProxyIpModal()">
 	<div class="modal api-optimize-modal chain-proxy-modal">
@@ -114,11 +110,9 @@ async function 注入ProxyIP后台入口(response) {
 				</div>
 			</div>
 		</div>
-		<p class="proxyip-save-hint">可用性验证为可选项；点击验证会将 ProxyIP 主机提交给原版第三方检测服务，仅作参考，不影响添加。也可以不验证直接添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。</p>
-		<div id="proxyIpNodeStatus"></div>
+		<p class="proxyip-save-hint">填写节点信息后可直接添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。ProxyIP 可用性请在独立检测项目中确认。</p>
 		<div class="api-buttons chain-proxy-buttons">
-			<button type="button" class="btn btn-verify-api" id="btnVerifyProxyIp" onclick="verifyProxyIpAvailability()" disabled>可用性验证</button>
-			<button type="button" class="btn btn-chain-add proxyip-add-btn" id="btnAddProxyIp" onclick="addProxyIpNode()" disabled>添加</button>
+			<button type="button" class="btn btn-chain-add proxyip-add-btn" id="btnAddProxyIp" onclick="addProxyIpNode()">添加</button>
 			<button type="button" class="btn btn-close-api" onclick="closeProxyIpModal()">取消</button>
 		</div>
 	</div>
@@ -128,8 +122,6 @@ async function 注入ProxyIP后台入口(response) {
 	const persisted = Object.create(null);
 	const pending = Object.create(null);
 	const nativeFetch = window.fetch.bind(window);
-	let proxyIpValidatedKey = '';
-	let proxyIpChecking = false;
 
 	function cleanLines(value){
 		return String(value || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
@@ -146,83 +138,6 @@ async function 注入ProxyIP后台入口(response) {
 		if (!v || v.includes('://') || /[\s/#$]/.test(v)) throw new Error('ProxyIP 格式无效');
 		return v;
 	}
-	function getProxyIpValidationKey(){
-		const host = normalizeHost(document.getElementById('proxyIpPreferredHost')?.value);
-		const port = Number(String(document.getElementById('proxyIpPreferredPort')?.value || '443').trim());
-		if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('优选端口必须为 1~65535');
-		const proxyip = normalizeProxy(document.getElementById('proxyIpAddress')?.value);
-		return host + ':' + port + '|' + proxyip;
-	}
-	function setProxyIpStatus(type, text){
-		const el = document.getElementById('proxyIpNodeStatus');
-		if (!el) return;
-		el.className = type || '';
-		el.textContent = text || '';
-		el.style.display = text ? 'block' : 'none';
-	}
-	function updateProxyIpVerifyButton(){
-		const verifyBtn = document.getElementById('btnVerifyProxyIp');
-		const addBtn = document.getElementById('btnAddProxyIp');
-		let valid = false;
-		try {
-			valid = !!getProxyIpValidationKey();
-			const name = String(document.getElementById('proxyIpNodeName')?.value || '').trim();
-			valid = valid && !!name;
-		} catch (_) { valid = false; }
-		if (verifyBtn) verifyBtn.disabled = proxyIpChecking || !valid;
-		if (addBtn) addBtn.disabled = !valid;
-	}
-	function resetProxyIpValidation(){
-		proxyIpValidatedKey = '';
-		if (!proxyIpChecking) setProxyIpStatus('', '');
-		updateProxyIpVerifyButton();
-	}
-	window.verifyProxyIpAvailability = async function(){
-		const verifyBtn = document.getElementById('btnVerifyProxyIp');
-		let key = '';
-		try {
-			key = getProxyIpValidationKey();
-			const rawProxy = normalizeProxy(document.getElementById('proxyIpAddress')?.value);
-			let checkerProxy = rawProxy;
-			try {
-				const parsed = new URL('https://' + rawProxy);
-				checkerProxy = String(parsed.hostname || rawProxy).replace(/^\[|\]$/g, '');
-			} catch (_) {}
-			proxyIpChecking = true;
-			proxyIpValidatedKey = '';
-			if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = '验证中...'; }
-			setProxyIpStatus('checking', '正在使用原版 ProxyIP 可用性检测服务验证...');
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), 10000);
-			let response;
-			try {
-				response = await nativeFetch('https://api.090227.xyz/check?proxyip=' + encodeURIComponent(checkerProxy), { signal: controller.signal, cache: 'no-store' });
-			} finally {
-				clearTimeout(timer);
-			}
-			const responseText = await response.text();
-			let data = {};
-			try { data = JSON.parse(responseText); }
-			catch (_) { throw new Error('检测服务返回非 JSON 数据（HTTP ' + response.status + '）'); }
-			if (!response.ok) throw new Error(data.msg || data.error || ('检测服务请求失败：HTTP ' + response.status));
-			if (!data.success) throw new Error(data.msg || data.error || '检测服务判定该 ProxyIP 不可用');
-			if (key !== getProxyIpValidationKey()) throw new Error('参数已变化，请重新验证');
-			proxyIpValidatedKey = key;
-			let detail = '验证通过';
-			if (Number.isFinite(Number(data.responseTime))) detail += ' · ' + Number(data.responseTime) + 'ms';
-			if (data.supports_ipv4 === true) detail += ' · IPv4';
-			if (data.supports_ipv6 === true) detail += ' · IPv6';
-			setProxyIpStatus('success', detail);
-		} catch (error) {
-			proxyIpValidatedKey = '';
-			const message = error?.name === 'AbortError' ? '原版 ProxyIP 检测服务超时' : (error?.message || String(error));
-			setProxyIpStatus('error', '验证失败：' + message);
-		} finally {
-			proxyIpChecking = false;
-			if (verifyBtn) verifyBtn.textContent = '可用性验证';
-			updateProxyIpVerifyButton();
-		}
-	};
 	function ensureButton(){
 		const source = document.getElementById('chainProxyBtn');
 		if (!source) return null;
@@ -302,7 +217,6 @@ async function 注入ProxyIP后台入口(response) {
 			try { if (typeof getDefaultChainProxyHost === 'function') def = getDefaultChainProxyHost(); } catch (_) {}
 			hostInput.value = def || String(window.location.hostname || '');
 		}
-		resetProxyIpValidation();
 		modal.classList.add('show');
 		setTimeout(function(){ nameInput && nameInput.focus(); }, 0);
 	};
@@ -338,8 +252,6 @@ async function 注入ProxyIP后台入口(response) {
 	ensureButton();
 	if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
 	document.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
-	['proxyIpPreferredHost','proxyIpPreferredPort','proxyIpAddress'].forEach(function(id){ document.getElementById(id)?.addEventListener('input', resetProxyIpValidation); });
-	document.getElementById('proxyIpNodeName')?.addEventListener('input', updateProxyIpVerifyButton);
 	window.addEventListener('resize', syncButton);
 	loadPersisted();
 	syncButton();
