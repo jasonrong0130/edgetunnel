@@ -1,0 +1,70 @@
+name: Fix ProxyIP verifier socket
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/fix-proxyip-verifier-socket.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch verifier to official Cloudflare socket API
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('_worker.js')
+          s = p.read_text(encoding='utf-8-sig')
+
+          import_line = "import { connect as 官方TCP连接 } from 'cloudflare:sockets';\n"
+          if import_line not in s:
+              s = import_line + s
+
+          pattern = re.compile(r"(async function 检测ProxyIP可用性\(request, proxyValue\) \{[\s\S]*?const startTime = Date\.now\(\);\n)\tconst TCP连接 = 创建请求TCP连接器\(request\);", re.M)
+          replacement = r"\1\t// 后台验证使用 Cloudflare 官方 sockets API；不复用 request.fetcher.connect 的请求级灰接口。\n\tconst TCP连接 = (options, init) => init === undefined ? 官方TCP连接(options) : 官方TCP连接(options, init);"
+          s2, n = pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'verifier connector anchor mismatch: {n}')
+          s = s2
+
+          # Make the error phase explicit so a failure can be diagnosed without guessing.
+          old = "\t\ttcpSocket = TCP连接({ hostname, port });\n\t\tif (tcpSocket.opened) await withTimeout(tcpSocket.opened, 5000, 'ProxyIP TCP连接超时');\n\t\ttlsSocket = new TlsClient(tcpSocket, { serverName: 'ifconfig.me', insecure: true });"
+          new = "\t\ttry {\n\t\t\ttcpSocket = TCP连接({ hostname, port });\n\t\t\tif (tcpSocket.opened) await withTimeout(tcpSocket.opened, 5000, 'ProxyIP TCP连接超时');\n\t\t} catch (err) {\n\t\t\tthrow new Error('ProxyIP TCP阶段失败：' + (err?.message || err));\n\t\t}\n\t\ttlsSocket = new TlsClient(tcpSocket, { serverName: 'ifconfig.me', insecure: true });"
+          if old not in s:
+              raise SystemExit('verifier TCP phase anchor not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validate
+        run: |
+          node --check _worker.js
+          git diff --check
+          grep -Fq "import { connect as 官方TCP连接 } from 'cloudflare:sockets';" _worker.js
+          grep -Fq '后台验证使用 Cloudflare 官方 sockets API' _worker.js
+          grep -Fq 'ProxyIP TCP阶段失败：' _worker.js
+          npx --yes wrangler@4.129.0 deploy --dry-run --outdir=/tmp/wrangler-dry
+
+      - name: Commit and clean helper
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+          git commit -m 'fix: use official socket API for ProxyIP verification'
+          git rm .github/workflows/fix-proxyip-verifier-socket.yml
+          git commit -m 'chore: remove temporary ProxyIP verifier socket workflow'
+          git push origin feature/force-proxyip
