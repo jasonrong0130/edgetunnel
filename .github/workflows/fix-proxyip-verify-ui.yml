@@ -20,40 +20,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply patch
-        shell: bash
-        run: |
-          python3 -c "import base64;exec(base64.b64decode('CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKcCA9IFBhdGgoJ193b3JrZXIuanMnKQpzID0gcC5yZWFkX3RleHQoZW5jb2Rpbmc9J3V0Zi04LXNpZycpCgpvbGRfY3NzID0gIiNwcm94eUlwTm9kZUJ0bi5wcm94eWlwLW5vZGUtYnRue2JhY2tncm91bmQ6bGluZWFyLWdyYWRpZW50KDEzNWRlZywjZWY0NDQ0IDAlLCNkYzI2MjYgMTAwJSkhaW1wb3J0YW50O2NvbG9yOiNmZmYhaW1wb3J0YW50O2JveC1zaGFkb3c6MCA0cHggMTVweCByZ2JhKDIyMCwzOCwzOCwuNDApIWltcG9ydGFudDtwYWRkaW5nOjEwcHggMjBweCFpbXBvcnRhbnQ7Zm9udC1zaXplOjE3cHghaW1wb3J0YW50O2ZvbnQtd2VpZ2h0OjYwMCFpbXBvcnRhbnQ7bGluZS1oZWlnaHQ6MTlweCFpbXBvcnRhbnQ7bGV0dGVyLXNwYWNpbmc6LjVweCFpbXBvcnRhbnQ7Ym9yZGVyLXJhZGl1czoxMnB4IWltcG9ydGFudDtib3gtc2l6aW5nOmJvcmRlci1ib3ghaW1wb3J0YW50fSIKbmV3X2NzcyA9ICIjcHJveHlJcE5vZGVCdG4ucHJveHlpcC1ub2RlLWJ0bntiYWNrZ3JvdW5kOmxpbmVhci1ncmFkaWVudCgxMzVkZWcsI2VmNDQ0NCAwJSwjZGMyNjI2IDEwMCUpIWltcG9ydGFudDtjb2xvcjojZmZmIWltcG9ydGFudDtib3gtc2hhZG93OjAgNHB4IDE1cHggcmdiYSgyMjAsMzgsMzgsLjQwKSFpbXBvcnRhbnQ7dGV4dC1hbGlnbjpjZW50ZXIhaW1wb3J0YW50fSIKaWYgb2xkX2NzcyBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2J1dHRvbiBDU1MgYW5jaG9yIG5vdCBmb3VuZCcpCnMgPSBzLnJlcGxhY2Uob2xkX2NzcywgbmV3X2NzcywgMSkKCm9sZF9zeW5jID0gIiIiXHRmdW5jdGlvbiBzeW5jQnV0dG9uKCl7Clx0XHRjb25zdCBzb3VyY2UgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnY2hhaW5Qcm94eUJ0bicpO1xuXHRcdGNvbnN0IGJ0biA9IGVuc3VyZUJ1dHRvbigpO1xuXHRcdGlmICghc291cmNlIHx8ICFidG4pIHJldHVybjtcblx0XHRidG4uY2xhc3NMaXN0LnRvZ2dsZSgnaGlkZGVuLXNlY3Rpb24nLCBzb3VyY2UuY2xhc3NMaXN0LmNvbnRhaW5zKCdoaWRkZW4tc2VjdGlvbicpKTtcblx0XHRidG4uc3R5bGUuZGlzcGxheSA9IHNvdXJjZS5zdHlsZS5kaXNwbGF5IHx8ICcnO1xuXHRcdHJlcXVlc3RBbmltYXRpb25GcmFtZShmdW5jdGlvbigpe1xuXHRcdFx0Y29uc3QgcmVjdCA9IHNvdXJjZS5nZXRCb3VuZGluZ0NsaWVudFJlY3QoKTtcblx0XHRcdGlmIChyZWN0LndpZHRoID4gMCkgYnRuLnN0eWxlLnNldFByb3BlcnR5KCd3aWR0aCcsIHJlY3Qud2lkdGggKyAncHgnLCAnaW1wb3J0YW50Jyk7XG5cdFx0XHRpZiAocmVjdC5oZWlnaHQgPiAwKSBidG4uc3R5bGUuc2V0UHJvcGVydHkoJ2hlaWdodCcsIHJlY3QuaGVpZ2h0ICsgJ3B4JywgJ2ltcG9ydGFudCcpO1xuXHRcdH0pO1xuXHR9XG4iIiIKbmV3X3N5bmMgPSAiIiJcdGZ1bmN0aW9uIHN5bmNCdXR0b24oKXtcblx0XHRjb25zdCBzb3VyY2UgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnY2hhaW5Qcm94eUJ0bicpO1xuXHRcdGNvbnN0IGJ0biA9IGVuc3VyZUJ1dHRvbigpO1xuXHRcdGlmICghc291cmNlIHx8ICFidG4pIHJldHVybjtcblx0XHRidG4uY2xhc3NMaXN0LnRvZ2dsZSgnaGlkZGVuLXNlY3Rpb24nLCBzb3VyY2UuY2xhc3NMaXN0LmNvbnRhaW5zKCdoaWRkZW4tc2VjdGlvbicpKTtcblx0XHRidG4uc3R5bGUuZGlzcGxheSA9IHNvdXJjZS5zdHlsZS5kaXNwbGF5IHx8ICcnO1xuXHR9XG4iIiIKaWYgb2xkX3N5bmMgbm90IGluIHM6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdzeW5jQnV0dG9uIGFuY2hvciBub3QgZm91bmQnKQpzID0gcy5yZXBsYWNlKG9sZF9zeW5jLCBuZXdfc3luYywgMSkKCm9sZF9vYnNlcnZlciA9ICJcdGlmIChjaGFpbkJ0bikgeyBuZXcgTXV0YXRpb25PYnNlcnZlcihzeW5jQnV0dG9uKS5vYnNlcnZlKGNoYWluQnRuLCB7IGF0dHJpYnV0ZXM6IHRydWUsIGF0dHJpYnV0ZUZpbHRlcjogWydjbGFzcycsJ3N0eWxlJ10gfSk7IGlmICh0eXBlb2YgUmVzaXplT2JzZXJ2ZXIgIT09ICd1bmRlZmluZWQnKSBuZXcgUmVzaXplT2JzZXJ2ZXIoc3luY0J1dHRvbikub2JzZXJ2ZShjaGFpbkJ0bik7IH0iCm5ld19vYnNlcnZlciA9ICJcdGlmIChjaGFpbkJ0bikgbmV3IE11dGF0aW9uT2JzZXJ2ZXIoc3luY0J1dHRvbikub2JzZXJ2ZShjaGFpbkJ0biwgeyBhdHRyaWJ1dGVzOiB0cnVlLCBhdHRyaWJ1dGVGaWx0ZXI6IFsnY2xhc3MnLCdzdHlsZSddIH0pOyIKaWYgb2xkX29ic2VydmVyIG5vdCBpbiBzOgogICAgcmFpc2UgU3lzdGVtRXhpdCgnb2JzZXJ2ZXIgYW5jaG9yIG5vdCBmb3VuZCcpCnMgPSBzLnJlcGxhY2Uob2xkX29ic2VydmVyLCBuZXdfb2JzZXJ2ZXIsIDEpCgpoZWxwZXJfYW5jaG9yID0gImFzeW5jIGZ1bmN0aW9uIOazqOWFpFByb3h5SVDlkI7lj7DlhaXlj6koZXNwb25zZSkgeyIKaGVscGVyID0gciciImFzeW5jIGZ1bmN0aW9uIOajgOa1i1Byb3h5SVDlj6/nlKjmgKcocmVxdWVzdCwgcHJveHlWYWx1ZSkgewoJY29uc3QgZW5kcG9pbnQgPSDop4Top4PljJZQcm94eUlQ56uv54K5KHByb3h5VmFsdWUpOwoJY29uc3QgcGFyc2VkID0gbmV3IFVSTCgnaHR0cHM6Ly8nICsgZW5kcG9pbnQpOwoJY29uc3QgaG9zdG5hbWUgPSBzdHJpcElQdjZCcmFja2V0cyhwYXJzZWQuaG9zdG5hbWUpOwoJY29uc3QgcG9ydCA9IE51bWJlcihwYXJzZWQucG9ydCB8fCA0NDMpOwoJY29uc3Qgc3RhcnRUaW1lID0gRGF0ZS5ub3coKTsKCWNvbnN0IFRDUOi/nuaOpeWZqCA9IOWIm+W7uuiuvua1glRDUOi/nuaOpeWZqChsZXQgY3BTb2NrZXQgPSBudWxsLCB0bHNTb2NrZXQgPSBudWxsOwoJY29uc3Qgd2l0aFRpbWVvdXQgPSAocHJvbWlzZSwgbXMsIG1lc3NhZ2UpID0+IFByb21pc2UucmFjZShbCgkJcHJvbWlzZSwKCQluZXcgUHJvbWlzZSgoXywgcmVqZWN0KSA9PiBzZXRUaW1lb3V0KCgpID0+IHJlamVjdChuZXcgRXJyb3IobWVzc2FnZSkpLCBtcykpCgldKTsKCXRyeSB7CgkJdGNwU29ja2V0ID0gVENQ6L+e5o6lKHsgaG9zdG5hbWUsIHBvcnQgfSk7CgkJaWYgKHRjcFNvY2tldC5vcGVuZWQpIGF3YWl0IHdpdGhUaW1lb3V0KHRjcFNvY2tldC5vcGVuZWQsIDUwMDAsICdQcm94eUlQIFRDUOi/nuaOpei2heaXticpOwoJCXRsc1NvY2tldCA9IG5ldyBUbHNDbGllbnQodGNwU29ja2V0LCB7IHNlcnZlck5hbWU6ICdjbG91ZGZsYXJlLmNvbScsIGluc2VjdXJlOiB0cnVlIH0pOwoJCWF3YWl0IHdpdGhUaW1lb3V0KHRsc1NvY2tldC5oYW5kc2hha2UoKSwgNjAwMCwgJ1Byb3h5SVAgVExT5o+h5omL6LaF5pe2Jyk7CgkJY29uc3QgZW5jb2RlciA9IG5ldyBUZXh0RW5jb2RlcigpLCBkZWNvZGVyID0gbmV3IFRleHREZWNvZGVyKCk7CgkJYXdhaXQgd2l0aFRpbWVvdXQodGxzU29ja2V0LndyaXRlKGVuY29kZXIuZW5jb2RlKCdHRVQgL2Nkbi1jZ2kvdHJhY2UgSFRUUC8xLjFcclxuSG9zdDogY2xvdWRmbGFyZS5jb21cclxuVXNlci1BZ2VudDogTW96aWxsYS81LjBcclxuQ29ubmVjdGlvbjogY2xvc2VcclxuXHJcbicpKSwgNTAwMCwgJ1Byb3h5SVDmo4DmtYvor7fmsYLlhpnlhaXotoXml7YnKTsKCQlsZXQgcmVzcG9uc2VCdWZmZXIgPSBuZXcgVWludDhBcnJheSgwKTsKCQljb25zdCBkZWFkbGluZSA9IERhdGUubm93KCkgKyA4MDAwLCBtYXhCeXRlcyA9IDY0ICogMTAyNDsKCQl3aGlsZSAoRGF0ZS5ub3coKSA8IGRlYWRsaW5lICYmIHJlc3BvbnNlQnVmZmVyLmxlbmd0aCA8IG1heEJ5dGVzKSB7CgkJCWNvbnN0IHJlbWFpbiA9IE1hdGgubWF4KDEsIGRlYWRsaW5lIC0gRGF0ZS5ub3coKSk7CgkJCWNvbnN0IHZhbHVlID0gYXdhaXQgd2l0aFRpbWVvdXQodGxzU29ja2V0LnJlYWQoKSwgcmVtYWluLCAnUHJveHlJUP 检测响应超时');
-			if (!value) break;
-			if (value.byteLength === 0) continue;
-			const merged = new Uint8Array(responseBuffer.length + value.byteLength);
-			merged.set(responseBuffer, 0);
-			merged.set(value, responseBuffer.length);
-			responseBuffer = merged;
-			const partial = decoder.decode(responseBuffer);
-			if (/(?:^|\n)ip=.+/m.test(partial) && /(?:^|\n)loc=.+/m.test(partial)) break;
-		}
-		if (!responseBuffer.length) throw new Error('ProxyIP未返回检测数据');
-		const responseText = decoder.decode(responseBuffer);
-		const statusLine = responseText.split('\r\n')[0] || '';
-		const statusMatch = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
-		const statusCode = statusMatch ? Number(statusMatch[1]) : NaN;
-		if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode >= 300) throw new Error('ProxyIP检测请求失败: ' + (statusLine || '无效响应'));
-		const ip = responseText.match(/(?:^|\n)ip=([^\r\n]+)/m)?.[1]?.trim();
-		const loc = responseText.match(/(?:^|\n)loc=([^\r\n]+)/m)?.[1]?.trim() || '';
-		const colo = responseText.match(/(?:^|\n)colo=([^\r\n]+)/m)?.[1]?.trim() || '';
-		if (!ip) throw new Error('ProxyIP检测响应中未找到出口IP');
-		return { success: true, proxyip: endpoint, ip, loc, colo, latency: Date.now() - startTime };
-	} finally {
-		try { tlsSocket?.close?.(); } catch (_) {}
-		try { tcpSocket?.close?.(); } catch (_) {}
-	}
-}
-
-"""
-aWYgaGVscGVyX2FuY2hvciBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2hlbHBlciBpbnNlcnQgYW5jaG9yIG5vdCBmb3VuZCcpCnMgPSBzLnJlcGxhY2UoaGVscGVyX2FuY2hvciwgaGVscGVyICsgaGVscGVyX2FuY2hvciwgMSkKCmNoZWNrX2FuY2hvciA9ICJcdFx0XHRcdH0gZWxzZSBpZiAo6K6/6Zeu6Lev5b6EID09PSAnYWRtaW4vY2hlY2snKSB7Ly8g5Luj55CG5qOA5p+lXG5cdFx0XHRcdGNvbnN0IOS7o+eQhuWNj+iusCA9IFsnc29ja3M1JywgJ2h0dHAnLCAnaHR0cHMnLCAndHVybicsICdzc3RwJ10uZmluZCjnsevlnotID0+IHVybC5zZWFyY2hQYXJhbXMuaGFzKOexu+WeiSkgfHwgbnVsbDsiCmNoZWNrX3JlcGwgPSAiXHRcdFx0XHRcdH0gZWxzZSBpZiAo6K6/6Zeu6Lev5b6EID09PSAnYWRtaW4vY2hlY2snKSB7Ly8g5Luj55CG5qOA5p+lXG5cdFx0XHRcdGlmICh1cmwuc2VhcmNoUGFyYW1zLmhhcygncHJveHlpcCcpKSB7XG5cdFx0XHRcdFx0dHJ5IHtcblx0XHRcdFx0XHRcdGNvbnN0IHJlc3VsdCA9IGF3YWl0IOajgOa1i1Byb3h5SVDlj6/nlKjmgKcocmVxdWVzdCwgdXJsLnNlYXJjaFBhcmFtcy5nZXQoJ3Byb3h5aXAnKSk7XG5cdFx0XHRcdFx0XHRyZXR1cm4gbmV3IFJlc3BvbnNlKEpTT04uc3RyaW5naWZ5KHJlc3VsdCwgbnVsbCwgMiksIHsgc3RhdHVzOiAyMDAsIGhlYWRlcnM6IHsgJ0NvbnRlbnQtVHlwZSc6ICdhcHBsaWNhdGlvbi9qc29uO2NoYXJzZXQ9dXRmLTgnIH0gfSk7XG5cdFx0XHRcdFx0fSBjYXRjaCAoZXJyKSB7XG5cdFx0XHRcdFx0XHRyZXR1cm4gbmV3IFJlc3BvbnNlKEpTT04uc3RyaW5naWZ5KHsgc3VjY2VzczogZmFsc2UsIG1zZzogJ1Byb3h5SVDpk77ot6/moozor4HlpLHotKU677yaJyArIChlcnI/Lm1lc3NhZ2UgfHwgZXJyKSwgZXJyb3I6IGVycj8ubWVzc2FnZSB8fCBTdHJpbmcoZXJyKSB9LCBudWxsLCAyKSwgeyBzdGF0dXM6IDUwMiwgaGVhZGVyczogeyAnQ29udGVudC1UeXBlJzogJ2FwcGxpY2F0aW9uL2pzb247Y2hhcnNldD11dGYtOCcgfSB9KTtcblx0XHRcdFx0XHR9XG5cdFx0XHRcdH1cblx0XHRcdFx0Y29uc3Qg5Luj55CG5Y2P6K6uID0gWydzb2NrczUnLCAnaHR0cCcsICdodHRwcycsICd0dXJuJywgJ3NzdHAnXS5maW5Z5qCHID0+IHVybC5zZWFyY2hQYXJhbXMuaGFzKOebruaghSkpIHx8IG51bGw7IgppZiBjaGVja19hbmNob3Igbm90IGluIHM6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdhZG1pbi9jaGVjayBhbmNob3Igbm90IGZvdW5kJykKcyA9IHMucmVwbGFjZShjaGVja19hbmNob3IsIGNoZWNrX3JlcGwsIDEpCgpzdGF0dXNfY3NzX2FuY2hvciA9ICIjcHJveHlJcE5vZGVNb2RhbCAucHJveHlpcC1hZGQtYnRue2JhY2tncm91bmQ6bGluZWFyLWdyYWRpZW50KDEzNWRlZywjZWY0NDQ0IDAlLCNkYzI2MjYgMTAwJSkhaW1wb3J0YW50O2NvbG9yOiNmZmYhaW1wb3J0YW50fVxuIgpzdGF0dXNfY3NzID0gc3RhdHVzX2Nz...'))"
+        run: python3 .github/patch_proxyip_verify.py
 
       - name: Validate
-        shell: bash
         run: |
           node --check _worker.js
           git diff --check
@@ -66,11 +35,10 @@ aWYgaGVscGVyX2FuY2hvciBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2hlbHBlciBpbnNl
           npx --yes wrangler@4.129.0 deploy --dry-run --outdir=/tmp/wrangler-dry
 
       - name: Commit and clean helper
-        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add _worker.js
-          git rm -f .github/workflows/fix-proxyip-verify-ui.yml
+          git rm -f .github/patch_proxyip_verify.py .github/workflows/fix-proxyip-verify-ui.yml
           git commit -m "feat: verify ProxyIP availability before adding node"
           git push origin HEAD:feature/force-proxyip
