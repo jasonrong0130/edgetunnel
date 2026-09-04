@@ -423,12 +423,16 @@ export default {
 
 								let 完整节点路径 = config_JSON.完整节点路径;
 
-								const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp):\/\/([^#\s]+)/i);
+								const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp|proxyip):\/\/([^#\s]+)/i);
 								if (链式代理匹配) {
 									try {
 										const 代理协议 = 链式代理匹配[1].toLowerCase(), 代理参数 = 链式代理匹配[2];
-										const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
-										完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;
+										if (代理协议 === 'proxyip') {
+											完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${代理参数}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
+										} else {
+											const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
+											完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;
+										}
 										节点备注 = 节点备注.replace(链式代理匹配[0], '').trim() || 节点地址;
 									} catch (error) {
 										console.warn(`[订阅内容] 链式代理解析失败，已忽略该指令: ${链式代理匹配[0]} (${error && error.message ? error.message : error})`);
@@ -1180,7 +1184,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 								if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid trojan request');
 								const { port, hostname, rawClientData, isUDP } = 解析结果;
 								log(`[gRPC] 木马首包: ${hostname}:${port} | UDP: ${isUDP ? '是' : '否'}`);
-								if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
+								if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null && !反代上下文.强制ProxyIP) {
 									grpcBridge.send(构造本地204响应());
 									return;
 								}
@@ -1200,7 +1204,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 								const { port, hostname, version, isUDP, rawClientData } = 解析结果;
 								log(`[gRPC] 魏烈思首包: ${hostname}:${port} | UDP: ${isUDP ? '是' : '否'}`);
 								const respHeader = new Uint8Array([version, 0]);
-								if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
+								if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null && !反代上下文.强制ProxyIP) {
 									grpcBridge.send(构造本地204响应(respHeader));
 									return;
 								}
@@ -1621,7 +1625,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			const port = (明文数据[cursor] << 8) | 明文数据[cursor + 1];
 			cursor += 2;
 			const rawClientData = 明文数据.subarray(cursor);
-			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
+			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null && !反代上下文.强制ProxyIP) {
 				await 启用WS本地测速模式(上下文.回包Socket, null, rawClientData);
 				return;
 			}
@@ -1668,7 +1672,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			const 解析结果 = 解析木马请求(chunk, yourUUID);
 			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid trojan request');
 			const { port, hostname, rawClientData, isUDP } = 解析结果;
-			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
+			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null && !反代上下文.强制ProxyIP) {
 				await 启用WS本地测速模式(serverSock, null, rawClientData);
 				return;
 			}
@@ -1689,7 +1693,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid 魏烈思 request');
 			const { port, hostname, version, isUDP, rawClientData } = 解析结果;
 			const respHeader = new Uint8Array([version, 0]);
-			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
+			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null && !反代上下文.强制ProxyIP) {
 				await 启用WS本地测速模式(serverSock, respHeader, rawClientData);
 				return;
 			}
@@ -2172,8 +2176,9 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	const ctx代理全局 = 反代上下文.代理全局 !== undefined ? 反代上下文.代理全局 : false;
 	const ctx代理参数 = 反代上下文.代理参数 || {};
 	const ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;
+	const ctx强制ProxyIP = 反代上下文.强制ProxyIP === true;
 	let 反代数组索引 = 0;
-	log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);
+	log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'} | 强制ProxyIP: ${ctx强制ProxyIP ? '是' : '否'}`);
 	const 连接超时毫秒 = 1000;
 	let 已通过代理发送首包 = false;
 	const TCP连接 = 创建请求TCP连接器(request);
@@ -2429,7 +2434,16 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	}
 	remoteConnWrapper.retryConnect = async () => connecttoPry(!已通过代理发送首包);
 
-	if (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\*/g, '.*')}$`, 'i').test(host)))) {
+	if (ctx强制ProxyIP) {
+		log(`[TCP转发] 启用强制 ProxyIP: ${ctx反代IP}`);
+		try {
+			await connecttoPry();
+			if (仅建立连接) return remoteConnWrapper.socket;
+		} catch (err) {
+			log(`[TCP转发] 强制 ProxyIP 连接失败: ${err.message}`);
+			throw err;
+		}
+	} else if (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\*/g, '.*')}$`, 'i').test(host)))) {
 		log(`[TCP转发] 启用 SOCKS5/HTTP/HTTPS/TURN/SSTP 全局代理`);
 		try {
 			await connecttoPry();
@@ -6160,8 +6174,8 @@ async function 反代参数获取(url, uuid, 默认反代IP = '', 默认反代�
 	const { searchParams } = url;
 	const pathname = decodeURIComponent(url.pathname);
 	const pathLower = pathname.toLowerCase();
-	let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底;
-	const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底 };
+	let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底, 强制ProxyIP = false;
+	const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底, 强制ProxyIP: false };
 	const 保存快照 = () => {
 		反代上下文.反代IP = 反代IP;
 		反代上下文.代理类型 = 启用SOCKS5反代;
@@ -6169,6 +6183,7 @@ async function 反代参数获取(url, uuid, 默认反代IP = '', 默认反代�
 		反代上下文.代理全局 = 启用SOCKS5全局反代;
 		反代上下文.代理参数 = { ...parsedSocks5Address };
 		反代上下文.反代兜底 = 启用反代兜底;
+		反代上下文.强制ProxyIP = 强制ProxyIP;
 	};
 
 	const 链式代理路径匹配 = pathname.match(/\/video\/(.+)$/i);
@@ -6239,6 +6254,16 @@ async function 反代参数获取(url, uuid, 默认反代IP = '', 默认反代�
 			console.error('解析木马反代地址失败:', err.message);
 			反代上下文.木马反代地址 = null;
 		}
+	}
+
+	const 强制反代IP匹配 = /\/forceproxyip=([^?#\s]+)/i.exec(pathname);
+	if (强制反代IP匹配) {
+		const 强制反代值 = 提取路径值(强制反代IP匹配[1]);
+		if (!强制反代值) throw new Error('强制 ProxyIP 地址为空');
+		设置反代IP(强制反代值);
+		强制ProxyIP = true;
+		保存快照();
+		return 反代上下文;
 	}
 
 	const 查询反代IP = searchParams.get('proxyip');
