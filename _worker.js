@@ -191,7 +191,7 @@ async function 注入ProxyIP后台入口(response) {
 		// 与原版“链式代理”按钮采用同样的静态 DOM 实现：直接放在同一 module-footer 内。
 		const chainButtonMarker = 'onclick="openChainProxyModal()">链式代理</button>';
 		if (!body.includes('id="proxyIpNodeBtn"')) {
-			if (!body.includes(chainButtonMarker)) throw new Error('未找到原版链式代理按钮');
+			// 静态标记未命中时继续执行；后续 ensureButton() 会按 chainProxyBtn 动态插入 PROXYIP 按钮。
 			const proxyButton = '\n\t\t\t\t\t\t<button type="button" class="btn btn-chain-proxy hidden-section proxyip-node-btn" id="proxyIpNodeBtn" onclick="openProxyIpModal()">PROXYIP</button>';
 			body = body.replace(chainButtonMarker, chainButtonMarker + proxyButton);
 		}
