@@ -120,23 +120,20 @@ function 生成ProxyIP节点管理页() {
 async function 注入ProxyIP后台入口(response) {
 	try {
 		const html = await response.text();
-		const marker = 'data-custom-proxyip-entry="1"';
-		if (html.includes(marker)) return new Response(html, { status: response.status, statusText: response.statusText, headers: response.headers });
-		const entry = `<script ${marker}>
-(function(){
- function install(){
-  if(document.getElementById('proxyIpNodeBtn'))return;
-  var chain=document.getElementById('chainProxyBtn');
-  if(!chain)return;
-  var btn=document.createElement('button');
-  btn.type='button';btn.id='proxyIpNodeBtn';btn.className='btn btn-chain-proxy';btn.textContent='ProxyIP节点';
-  btn.onclick=function(){location.href='/admin/proxyip'};
-  chain.insertAdjacentElement('afterend',btn);
- }
- if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
-})();
-</script>`;
-		const body = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, entry + '</body>') : html + entry;
+		if (html.includes('id="proxyIpNodeBtn"')) {
+			const headers = new Headers(response.headers);
+			headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
+			return new Response(html, { status: response.status, statusText: response.statusText, headers });
+		}
+		const proxyButton = '<button type="button" class="btn btn-chain-proxy" id="proxyIpNodeBtn" onclick="location.href=\'/admin/proxyip\'">ProxyIP节点</button>';
+		const chainButtonPattern = /(<button\s+type="button"\s+class="btn btn-chain-proxy hidden-section"\s+id="chainProxyBtn"[\s\S]*?<\/button>)/i;
+		let body;
+		if (chainButtonPattern.test(html)) {
+			body = html.replace(chainButtonPattern, '$1\n\t\t\t\t\t\t' + proxyButton);
+		} else {
+			const fallback = '<a id="proxyIpNodeBtn" href="/admin/proxyip" style="position:fixed;right:22px;bottom:22px;z-index:99999;padding:11px 16px;border-radius:12px;background:#f6821f;color:#fff;text-decoration:none;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.18)">ProxyIP节点</a>';
+			body = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, fallback + '</body>') : html + fallback;
+		}
 		const headers = new Headers(response.headers);
 		headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
 		return new Response(body, { status: response.status, statusText: response.statusText, headers });
@@ -145,6 +142,7 @@ async function 注入ProxyIP后台入口(response) {
 		return response;
 	}
 }
+
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
