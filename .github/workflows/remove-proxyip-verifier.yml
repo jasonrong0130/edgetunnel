@@ -1,0 +1,90 @@
+name: Remove ProxyIP verifier from EDT
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/remove-proxyip-verifier.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Remove verifier UI and logic
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('_worker.js')
+          s = p.read_text(encoding='utf-8-sig')
+
+          # Remove verifier-specific status CSS.
+          s = re.sub(r'^#proxyIpNodeStatus\{[^\n]*\}\n#proxyIpNodeStatus\.checking\{[^\n]*\}\n#proxyIpNodeStatus\.success\{[^\n]*\}\n#proxyIpNodeStatus\.error\{[^\n]*\}\n', '', s, count=1, flags=re.M)
+
+          old_hint = '可用性验证为可选项；点击验证会将 ProxyIP 主机提交给原版第三方检测服务，仅作参考，不影响添加。也可以不验证直接添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。'
+          new_hint = '填写节点信息后可直接添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。ProxyIP 可用性请在独立检测项目中确认。'
+          if old_hint not in s:
+              raise SystemExit('ProxyIP hint text not found')
+          s = s.replace(old_hint, new_hint, 1)
+
+          s = s.replace('\n\t\t<div id="proxyIpNodeStatus"></div>', '', 1)
+          verify_button = '\n\t\t\t<button type="button" class="btn btn-verify-api" id="btnVerifyProxyIp" onclick="verifyProxyIpAvailability()" disabled>可用性验证</button>'
+          if verify_button not in s:
+              raise SystemExit('ProxyIP verify button not found')
+          s = s.replace(verify_button, '', 1)
+          s = s.replace('id="btnAddProxyIp" onclick="addProxyIpNode()" disabled', 'id="btnAddProxyIp" onclick="addProxyIpNode()"', 1)
+
+          s = s.replace("\n\tlet proxyIpValidatedKey = '';\n\tlet proxyIpChecking = false;\n", '\n', 1)
+
+          start = s.find('\tfunction getProxyIpValidationKey(){')
+          end = s.find('\tfunction ensureButton(){', start)
+          if start == -1 or end == -1:
+              raise SystemExit('ProxyIP verifier client block not found')
+          s = s[:start] + s[end:]
+
+          if '\n\t\tresetProxyIpValidation();' not in s:
+              raise SystemExit('open modal validation reset not found')
+          s = s.replace('\n\t\tresetProxyIpValidation();', '', 1)
+
+          listener_block = "\n\t['proxyIpPreferredHost','proxyIpPreferredPort','proxyIpAddress'].forEach(function(id){ document.getElementById(id)?.addEventListener('input', resetProxyIpValidation); });\n\tdocument.getElementById('proxyIpNodeName')?.addEventListener('input', updateProxyIpVerifyButton);"
+          if listener_block not in s:
+              raise SystemExit('ProxyIP verifier listeners not found')
+          s = s.replace(listener_block, '', 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validate
+        run: |
+          node --check _worker.js
+          git diff --check
+          grep -Fq 'id="btnAddProxyIp" onclick="addProxyIpNode()"' _worker.js
+          grep -Fq 'ProxyIP 可用性请在独立检测项目中确认。' _worker.js
+          ! grep -Fq 'btnVerifyProxyIp' _worker.js
+          ! grep -Fq 'verifyProxyIpAvailability' _worker.js
+          ! grep -Fq 'proxyIpNodeStatus' _worker.js
+          ! grep -Fq 'api.090227.xyz/check?proxyip=' _worker.js
+          ! grep -Fq 'proxyIpValidatedKey' _worker.js
+          ! grep -Fq 'proxyIpChecking' _worker.js
+          npx --yes wrangler@4.129.0 deploy --dry-run --outdir=/tmp/wrangler-dry
+
+      - name: Commit and clean helper
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+          git commit -m 'refactor: remove ProxyIP verification from EDT admin'
+          git rm .github/workflows/remove-proxyip-verifier.yml
+          git commit -m 'chore: remove temporary ProxyIP verifier cleanup workflow'
+          git push origin feature/force-proxyip
