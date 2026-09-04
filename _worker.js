@@ -166,7 +166,8 @@ async function 注入ProxyIP后台入口(response) {
 		return host;
 	}
 	function normalizeProxy(value){
-		const v = String(value || '').trim();
+		let v = String(value || '').trim();
+		v = v.replace(/^proxyip:\/\//i, '').trim();
 		if (!v || v.includes('://') || /[\s/#$]/.test(v)) throw new Error('ProxyIP 格式无效');
 		return v;
 	}
