@@ -1,0 +1,23 @@
+name: Diagnose ProxyIP admin hook
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/diagnose-proxyip-hook.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+      - name: Show hook usage
+        shell: bash
+        run: |
+          grep -n "注入ProxyIP后台入口\|Pages静态页面 + '/admin'\|Pages静态页面+'/admin'" _worker.js || true
