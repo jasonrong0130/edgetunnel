@@ -1,0 +1,57 @@
+name: Fix ProxyIP regex syntax
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/fix-proxyip-regex.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Repair malformed split regex
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('_worker.js')
+          lines = path.read_text(encoding='utf-8-sig').splitlines()
+          marker = "const 当前行集合 = new Set(customIPs.split(/"
+          idx = next((i for i, line in enumerate(lines) if marker in line), None)
+          if idx is None:
+              raise SystemExit('target malformed split regex not found')
+          if idx + 2 >= len(lines) or lines[idx + 1].strip() != '?' or '/).map(v => v.trim()).filter(Boolean));' not in lines[idx + 2]:
+              raise SystemExit('unexpected malformed regex shape; refusing broad edit')
+          indent = lines[idx][:len(lines[idx]) - len(lines[idx].lstrip())]
+          lines[idx:idx + 3] = [indent + "const 当前行集合 = new Set(customIPs.split(/\\r?\\n/).map(v => v.trim()).filter(Boolean));"]
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+
+      - name: Validate JavaScript and Wrangler bundle
+        shell: bash
+        run: |
+          node --check _worker.js
+          git diff --check
+          grep -Fq 'customIPs.split(/\\r?\\n/)' _worker.js
+          npx -y wrangler@4.129.0 deploy --dry-run --outdir /tmp/wrangler-dry
+
+      - name: Commit repair and remove helper
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _worker.js
+          git rm -f .github/workflows/fix-proxyip-regex.yml
+          git commit -m "fix: repair ProxyIP custom subscription save syntax"
+          git push origin HEAD:feature/force-proxyip
