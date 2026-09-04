@@ -1,3 +1,4 @@
+import ProxyIPCheckerWorker from './proxyip-checker-source.js';
 const Version = '2026-08-11 14:45:22';
 let config_JSON, 缓存SOCKS5白名单 = null, 调试日志打印 = false;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
@@ -58,6 +59,36 @@ function 规范化优选节点主机(value) {
 	return host;
 }
 
+const 内嵌ProxyIP检测器前缀 = '/admin/proxyip-checker';
+
+async function 处理内嵌ProxyIP检测器(request, env) {
+	const outerUrl = new URL(request.url);
+	let suffix = outerUrl.pathname.slice(内嵌ProxyIP检测器前缀.length);
+	if (!suffix) suffix = '/';
+	else if (!suffix.startsWith('/')) suffix = '/' + suffix;
+
+	const innerUrl = new URL(outerUrl.toString());
+	innerUrl.pathname = suffix;
+	const innerRequest = new Request(innerUrl.toString(), request);
+	const response = await ProxyIPCheckerWorker.fetch(innerRequest, env);
+	const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+	if (!contentType.includes('text/html')) return response;
+
+	let html = await response.text();
+	html = html
+		.replaceAll("'/check?proxyip='", "'/admin/proxyip-checker/check?proxyip='")
+		.replaceAll("'/resolve?proxyip='", "'/admin/proxyip-checker/resolve?proxyip='")
+		.replaceAll("'/resolve-batch'", "'/admin/proxyip-checker/resolve-batch'")
+		.replaceAll("'/locations'", "'/admin/proxyip-checker/locations'")
+		.replace('const path = window.location.pathname.slice(1);', "const path = window.location.pathname.replace(/^\\/admin\\/proxyip-checker\\/?/, '');");
+
+	const headers = new Headers(response.headers);
+	headers.delete('content-length');
+	headers.delete('content-encoding');
+	headers.set('Cache-Control', 'no-store');
+	return new Response(html, { status: response.status, statusText: response.statusText, headers });
+}
+
 async function 注入ProxyIP后台入口(response) {
 	try {
 		const html = await response.text();
@@ -110,8 +141,9 @@ async function 注入ProxyIP后台入口(response) {
 				</div>
 			</div>
 		</div>
-		<p class="proxyip-save-hint">填写节点信息后可直接添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。ProxyIP 可用性请在独立检测项目中确认。</p>
+		<p class="proxyip-save-hint">填写节点信息后可直接添加。点击“可用性验证”会在新选项卡打开内置 ProxyIP 检测中心，并自动带入当前 ProxyIP；检测结果不影响添加。添加后点击原页面“保存”才正式生效。</p>
 		<div class="api-buttons chain-proxy-buttons">
+			<button type="button" class="btn btn-verify-api" id="btnVerifyProxyIp" onclick="openProxyIpChecker()">可用性验证</button>
 			<button type="button" class="btn btn-chain-add proxyip-add-btn" id="btnAddProxyIp" onclick="addProxyIpNode()">添加</button>
 			<button type="button" class="btn btn-close-api" onclick="closeProxyIpModal()">取消</button>
 		</div>
@@ -138,6 +170,19 @@ async function 注入ProxyIP后台入口(response) {
 		if (!v || v.includes('://') || /[\s/#$]/.test(v)) throw new Error('ProxyIP 格式无效');
 		return v;
 	}
+	window.openProxyIpChecker = function(){
+		try {
+			const proxyip = normalizeProxy(document.getElementById('proxyIpAddress')?.value);
+			const checkerUrl = '/admin/proxyip-checker/' + encodeURIComponent(proxyip);
+			const tab = window.open('about:blank', '_blank');
+			if (!tab) throw new Error('浏览器阻止了新选项卡，请允许本站打开新选项卡');
+			try { tab.opener = null; } catch (_) {}
+			tab.location.href = checkerUrl;
+		} catch (error) {
+			if (typeof showToast === 'function') showToast(error.message || String(error), 'error');
+			else alert(error.message || String(error));
+		}
+	};
 	function ensureButton(){
 		const source = document.getElementById('chainProxyBtn');
 		if (!source) return null;
@@ -370,7 +415,9 @@ export default {
 					const authCookie = cookies.split(';').find(c => c.trim().startsWith('auth='))?.split('=')[1];
 					// 没有cookie或cookie错误，跳转到/login页面
 					if (!authCookie || authCookie !== await MD5MD5(UA + 加密秘钥 + 管理员密码)) return new Response('重定向中...', { status: 302, headers: { 'Location': '/login' } });
-					if (访问路径 === 'admin/log.json') {// 读取日志内容
+					if (访问路径 === 'admin/proxyip-checker' || 访问路径.startsWith('admin/proxyip-checker/')) {// 内嵌 ProxyIP 检测中心
+						return await 处理内嵌ProxyIP检测器(request, env);
+					} else if (访问路径 === 'admin/log.json') {// 读取日志内容
 						const 读取日志内容 = await env.KV.get('log.json') || '[]';
 						return new Response(读取日志内容, { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 					} else if (区分大小写访问路径 === 'admin/getCloudflareUsage') {// 查询请求量
