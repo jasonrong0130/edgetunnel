@@ -122,7 +122,7 @@ async function 注入ProxyIP后台入口(response) {
 		const chainButtonMarker = 'onclick="openChainProxyModal()">链式代理</button>';
 		if (!body.includes('id="proxyIpNodeBtn"')) {
 			if (!body.includes(chainButtonMarker)) throw new Error('未找到原版链式代理按钮');
-			const proxyButton = '\n\t\t\t\t\t\t<button type="button" class="btn btn-chain-proxy hidden-section proxyip-node-btn" id="proxyIpNodeBtn" onclick="openProxyIpModal()">ProxyIP</button>';
+			const proxyButton = '\n\t\t\t\t\t\t<button type="button" class="btn btn-chain-proxy hidden-section proxyip-node-btn" id="proxyIpNodeBtn" onclick="openProxyIpModal()">PROXYIP</button>';
 			body = body.replace(chainButtonMarker, chainButtonMarker + proxyButton);
 		}
 
@@ -264,7 +264,7 @@ async function 注入ProxyIP后台入口(response) {
 			btn.type = 'button';
 			btn.className = 'btn btn-chain-proxy hidden-section proxyip-node-btn';
 			btn.id = 'proxyIpNodeBtn';
-			btn.textContent = 'ProxyIP';
+			btn.textContent = 'PROXYIP';
 			btn.addEventListener('click', function(){ window.openProxyIpModal(); });
 			source.insertAdjacentElement('afterend', btn);
 		}
