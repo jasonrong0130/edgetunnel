@@ -1,0 +1,97 @@
+from pathlib import Path
+
+p = Path('_worker.js')
+s = p.read_text(encoding='utf-8-sig')
+
+helper_anchor = 'async function 注入ProxyIP后台入口(response) {'
+helper = '''async function 处理ProxyIP验证WS(request, proxyValue) {
+\tconst WS套接字对 = new WebSocketPair();
+\tconst [clientSock, serverSock] = Object.values(WS套接字对);
+\ttry { (/** @type {any} */ (serverSock)).accept({ allowHalfOpen: true }) }
+\tcatch (_) { serverSock.accept() }
+
+\tconst 发送并关闭 = (payload) => {
+\t\ttry { serverSock.send(JSON.stringify(payload)) } catch (_) { }
+\t\tsetTimeout(() => { try { serverSock.close(1000, 'done') } catch (_) { } }, 20);
+\t};
+
+\tPromise.resolve().then(async () => {
+\t\ttry {
+\t\t\t发送并关闭(await 检测ProxyIP可用性(request, proxyValue));
+\t\t} catch (err) {
+\t\t\t发送并关闭({ success: false, msg: 'ProxyIP链路验证失败：' + (err?.message || err), error: err?.message || String(err) });
+\t\t}
+\t});
+
+\treturn new Response(null, { status: 101, webSocket: clientSock });
+}
+
+'''
+if 'async function 处理ProxyIP验证WS(' not in s:
+    if helper_anchor not in s:
+        raise SystemExit('admin injection anchor not found')
+    s = s.replace(helper_anchor, helper + helper_anchor, 1)
+
+route_old = """\t\t} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
+\t\t\tconst 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
+\t\t\tlog(`[WebSocket] 命中请求: ${url.pathname}${url.search}`);
+\t\t\treturn await 处理WS请求(request, userID, url, 反代上下文);"""
+route_new = """\t\t} else if (管理员密码 && upgradeHeader === 'websocket' && 访问路径 === 'admin/proxyip-check-ws') {// ProxyIP 可用性验证：使用与正式节点一致的 WebSocket 请求上下文
+\t\t\tconst cookies = request.headers.get('Cookie') || '';
+\t\t\tconst authCookie = cookies.split(';').find(c => c.trim().startsWith('auth='))?.split('=')[1];
+\t\t\tif (!authCookie || authCookie !== await MD5MD5(UA + 加密秘钥 + 管理员密码)) return new Response('Unauthorized', { status: 403 });
+\t\t\tconst proxyValue = url.searchParams.get('proxyip');
+\t\t\tif (!proxyValue) return new Response('Missing proxyip', { status: 400 });
+\t\t\treturn await 处理ProxyIP验证WS(request, proxyValue);
+\t\t} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
+\t\t\tconst 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
+\t\t\tlog(`[WebSocket] 命中请求: ${url.pathname}${url.search}`);
+\t\t\treturn await 处理WS请求(request, userID, url, 反代上下文);"""
+if "访问路径 === 'admin/proxyip-check-ws'" not in s:
+    if route_old not in s:
+        raise SystemExit('websocket route anchor not found')
+    s = s.replace(route_old, route_new, 1)
+
+fetch_old = """\t\t\tconst resp = await nativeFetch('/admin/check?proxyip=' + encodeURIComponent(proxyip) + '&_t=' + Date.now(), { cache: 'no-store' });
+\t\t\tlet data = {};
+\t\t\ttry { data = await resp.json(); } catch (_) {}
+\t\t\tif (!resp.ok || !data.success) throw new Error(data.msg || data.error || ('HTTP ' + resp.status));"""
+fetch_new = """\t\t\tconst scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+\t\t\tconst wsUrl = scheme + '//' + location.host + '/admin/proxyip-check-ws?proxyip=' + encodeURIComponent(proxyip) + '&_t=' + Date.now();
+\t\t\tconst data = await new Promise((resolve, reject) => {
+\t\t\t\tlet settled = false;
+\t\t\t\tconst ws = new WebSocket(wsUrl);
+\t\t\t\tconst timer = setTimeout(() => {
+\t\t\t\t\tif (settled) return;
+\t\t\t\t\tsettled = true;
+\t\t\t\t\ttry { ws.close() } catch (_) {}
+\t\t\t\t\treject(new Error('ProxyIP WebSocket验证超时'));
+\t\t\t\t}, 15000);
+\t\t\t\tws.onmessage = (event) => {
+\t\t\t\t\tif (settled) return;
+\t\t\t\t\tsettled = true;
+\t\t\t\t\tclearTimeout(timer);
+\t\t\t\t\ttry { resolve(JSON.parse(String(event.data || '{}'))) }
+\t\t\t\t\tcatch (_) { reject(new Error('ProxyIP验证响应格式无效')) }
+\t\t\t\t\ttry { ws.close() } catch (_) {}
+\t\t\t\t};
+\t\t\t\tws.onerror = () => {
+\t\t\t\t\tif (settled) return;
+\t\t\t\t\tsettled = true;
+\t\t\t\t\tclearTimeout(timer);
+\t\t\t\t\treject(new Error('ProxyIP WebSocket验证连接失败'));
+\t\t\t\t};
+\t\t\t\tws.onclose = () => {
+\t\t\t\t\tif (settled) return;
+\t\t\t\t\tsettled = true;
+\t\t\t\t\tclearTimeout(timer);
+\t\t\t\t\treject(new Error('ProxyIP验证通道提前关闭'));
+\t\t\t\t};
+\t\t\t});
+\t\t\tif (!data.success) throw new Error(data.msg || data.error || 'ProxyIP链路验证失败');"""
+if 'ProxyIP WebSocket验证超时' not in s:
+    if fetch_old not in s:
+        raise SystemExit('client verification anchor not found')
+    s = s.replace(fetch_old, fetch_new, 1)
+
+p.write_text(s, encoding='utf-8')
