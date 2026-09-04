@@ -24,58 +24,22 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
+          import re
           p = Path('_worker.js')
           s = p.read_text(encoding='utf-8-sig')
-
-          old_placeholder = 'placeholder="45.196.234.118:443"'
-          new_placeholder = 'placeholder="1.1.1.1:443"'
-          if old_placeholder not in s:
+          old = 'placeholder="45.196.234.118:443"'
+          if old not in s:
               raise SystemExit('ProxyIP placeholder anchor not found')
-          s = s.replace(old_placeholder, new_placeholder, 1)
-
-          old_sync = """\tfunction syncButton(){
-\t\tconst source = document.getElementById('chainProxyBtn');
-\t\tconst btn = ensureButton();
-\t\tif (!source || !btn) return;
-\t\tbtn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));
-\t\tbtn.style.display = source.style.display || '';
-\t\trequestAnimationFrame(function(){
-\t\t\tconst w = source.getBoundingClientRect().width;
-\t\t\tif (w > 0) btn.style.width = w + 'px';
-\t\t});
-\t}
-"""
-          new_sync = """\tfunction syncButton(){
-\t\tconst source = document.getElementById('chainProxyBtn');
-\t\tconst btn = ensureButton();
-\t\tif (!source || !btn) return;
-\t\tbtn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));
-\t\tbtn.style.display = source.style.display || '';
-\t\trequestAnimationFrame(function(){
-\t\t\tconst rect = source.getBoundingClientRect();
-\t\t\tif (rect.width > 0) btn.style.setProperty('width', rect.width + 'px', 'important');
-\t\t\tif (rect.height > 0) btn.style.setProperty('height', rect.height + 'px', 'important');
-\t\t});
-\t}
-"""
-          if old_sync not in s:
+          s = s.replace(old, 'placeholder="1.1.1.1:443"', 1)
+          pattern = r"function syncButton\(\)\{[\s\S]*?\n\t\}"
+          replacement = "function syncButton(){\n\t\tconst source = document.getElementById('chainProxyBtn');\n\t\tconst btn = ensureButton();\n\t\tif (!source || !btn) return;\n\t\tbtn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));\n\t\tbtn.style.display = source.style.display || '';\n\t\trequestAnimationFrame(function(){\n\t\t\tconst rect = source.getBoundingClientRect();\n\t\t\tif (rect.width > 0) btn.style.setProperty('width', rect.width + 'px', 'important');\n\t\t\tif (rect.height > 0) btn.style.setProperty('height', rect.height + 'px', 'important');\n\t\t});\n\t}"
+          s, n = re.subn(pattern, replacement, s, count=1)
+          if n != 1:
               raise SystemExit('syncButton anchor not found')
-          s = s.replace(old_sync, new_sync, 1)
-
-          old_observer = """\tif (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
-\tdocument.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
-"""
-          new_observer = """\tif (chainBtn) {
-\t\tnew MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
-\t\tif (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncButton).observe(chainBtn);
-\t}
-\tdocument.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
-"""
-          if old_observer not in s:
+          anchor = "if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });"
+          if anchor not in s:
               raise SystemExit('observer anchor not found')
-          s = s.replace(old_observer, new_observer, 1)
-
+          s = s.replace(anchor, "if (chainBtn) { new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] }); if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncButton).observe(chainBtn); }", 1)
           p.write_text(s, encoding='utf-8')
           PY
 
