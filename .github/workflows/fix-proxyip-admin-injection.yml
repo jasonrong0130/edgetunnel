@@ -31,7 +31,7 @@ jobs:
           git diff --check
           grep -Fq "后续 ensureButton() 会按 chainProxyBtn 动态插入 PROXYIP 按钮" _worker.js
           grep -Fq "function ensureButton()" _worker.js
-          grep -Fq "id = \"proxyIpNodeBtn\"" _worker.js
+          grep -Fq "btn.id = 'proxyIpNodeBtn'" _worker.js
 
       - name: Commit fix and cleanup helpers
         shell: bash
