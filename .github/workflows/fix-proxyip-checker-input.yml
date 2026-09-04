@@ -1,0 +1,45 @@
+name: Fix ProxyIP checker input
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/fix-proxyip-checker-input.yml
+      - .github/scripts/fix_proxyip_checker_input.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch input normalization
+        run: python3 .github/scripts/fix_proxyip_checker_input.py
+
+      - name: Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check _worker.js
+          git diff --check
+          grep -Fq "v = v.replace(/^proxyip:\\/\\//i, '').trim();" _worker.js
+          grep -Fq "window.open('about:blank', '_blank')" _worker.js
+
+      - name: Commit and clean helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+          git commit -m 'fix: accept proxyip scheme in checker button'
+          git rm .github/workflows/fix-proxyip-checker-input.yml .github/scripts/fix_proxyip_checker_input.py
+          git commit -m 'chore: remove temporary checker input fix helpers'
+          git push origin feature/force-proxyip
