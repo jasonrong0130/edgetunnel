@@ -106,7 +106,7 @@ async function 注入ProxyIP后台入口(response) {
 				<label for="proxyIpAddress">ProxyIP:</label>
 				<div class="proxyip-address-wrap">
 					<span class="proxyip-prefix">proxyip://</span>
-					<input type="text" id="proxyIpAddress" title="ProxyIP 地址" placeholder="45.196.234.118:443">
+					<input type="text" id="proxyIpAddress" title="ProxyIP 地址" placeholder="1.1.1.1:443">
 				</div>
 			</div>
 		</div>
@@ -160,8 +160,9 @@ async function 注入ProxyIP后台入口(response) {
 		btn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));
 		btn.style.display = source.style.display || '';
 		requestAnimationFrame(function(){
-			const w = source.getBoundingClientRect().width;
-			if (w > 0) btn.style.width = w + 'px';
+			const rect = source.getBoundingClientRect();
+			if (rect.width > 0) btn.style.setProperty('width', rect.width + 'px', 'important');
+			if (rect.height > 0) btn.style.setProperty('height', rect.height + 'px', 'important');
 		});
 	}
 	async function loadPersisted(){
@@ -254,7 +255,7 @@ async function 注入ProxyIP后台入口(response) {
 
 	const chainBtn = document.getElementById('chainProxyBtn');
 	ensureButton();
-	if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
+	if (chainBtn) { new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] }); if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncButton).observe(chainBtn); }
 	document.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
 	window.addEventListener('resize', syncButton);
 	loadPersisted();
