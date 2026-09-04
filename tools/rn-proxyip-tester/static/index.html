@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RN ProxyIP Tester</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111827;background:#f5f7fb}
+*{box-sizing:border-box}body{margin:0}.wrap{max-width:1500px;margin:auto;padding:24px}h1{margin:0 0 8px}.sub{color:#6b7280;margin:0 0 20px}
+.card{background:white;border:1px solid #e5e7eb;border-radius:16px;padding:18px;margin-bottom:16px;box-shadow:0 8px 30px rgba(17,24,39,.04)}
+.grid{display:grid;grid-template-columns:2fr repeat(5,1fr);gap:12px}.field label{display:block;font-size:12px;color:#6b7280;margin-bottom:6px}
+input,textarea,select,button{font:inherit}input,textarea,select{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:10px;background:white}
+textarea{height:180px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+button{border:0;border-radius:10px;padding:10px 16px;cursor:pointer;background:#111827;color:#fff}.secondary{background:#e5e7eb;color:#111827}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.stat{padding:14px;border-radius:12px;background:#f8fafc}.stat b{font-size:24px;display:block}.stat span{font-size:12px;color:#6b7280}
+.progress{height:8px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:12px}.progress i{display:block;height:100%;background:#111827;width:0}
+.table-wrap{overflow:auto;max-height:62vh}table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}th,td{padding:9px;border-bottom:1px solid #eef2f7;text-align:left}th{position:sticky;top:0;background:#fff;z-index:1}
+.ok{color:#047857;font-weight:700}.bad{color:#b91c1c;font-weight:700}.warn{color:#b45309;font-weight:700}.muted{color:#6b7280}
+@media(max-width:900px){.grid,.stats{grid-template-columns:1fr 1fr}.wrap{padding:12px}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>RN ProxyIP Tester</h1>
+<p class="sub">批量筛可用 → 验证真实出口 → 只对可用节点测速。默认快速检测 50 并发，测速 4 并发。</p>
+
+<div class="card">
+<div class="grid">
+<div class="field" style="grid-column:span 2"><label>API Token</label><input id="token" type="password" placeholder="粘贴 /etc/rn-proxyip-tester.env 里的 Token"></div>
+<div class="field"><label>检测并发</label><input id="checkConcurrency" type="number" value="50" min="1" max="200"></div>
+<div class="field"><label>测速并发</label><input id="speedConcurrency" type="number" value="4" min="1" max="10"></div>
+<div class="field"><label>测速大小</label><select id="speedBytes"><option value="5242880">5 MiB</option><option value="10485760">10 MiB</option><option value="31457280">30 MiB</option><option value="52428800">50 MiB</option></select></div>
+<div class="field"><label>重复次数</label><select id="speedRepeats"><option>1</option><option selected>3</option><option>5</option></select></div>
+</div>
+<div class="field" style="margin-top:12px"><label>ProxyIP 列表（每行一个，也支持逗号/空格）</label><textarea id="targets" placeholder="45.196.234.118:443&#10;1.2.3.4:443&#10;proxy.example.com:443"></textarea></div>
+<div class="actions">
+<button id="start">开始：筛选 + 出口验证 + 测速</button>
+<button id="startNoSpeed" class="secondary">只筛选，不测速</button>
+<button id="export" class="secondary" disabled>导出 CSV</button>
+<label style="display:flex;align-items:center;gap:6px"><input id="generic" type="checkbox" checked style="width:auto">测试通用 SNI（gstatic）</label>
+</div></div>
+
+<div class="card"><div class="stats">
+<div class="stat"><b id="sTotal">0</b><span>总数</span></div><div class="stat"><b id="sDone">0</b><span>已筛选</span></div>
+<div class="stat"><b id="sAvail">0</b><span>可用</span></div><div class="stat"><b id="sSame">0</b><span>入口=出口</span></div>
+<div class="stat"><b id="sSpeed">0</b><span>已测速</span></div><div class="stat"><b id="sState">Idle</b><span>状态</span></div>
+</div><div class="progress"><i id="bar"></i></div></div>
+
+<div class="card">
+<div class="actions" style="margin-top:0;margin-bottom:10px">
+<select id="filter" style="max-width:220px"><option value="all">全部</option><option value="available">只看可用</option><option value="same">只看入口=出口</option><option value="generic">只看通用SNI可用</option></select>
+<select id="sort" style="max-width:220px"><option value="input">原顺序</option><option value="speed">速度从高到低</option><option value="latency">TCP延迟从低到高</option></select>
+</div>
+<div class="table-wrap"><table><thead><tr>
+<th>ProxyIP</th><th>基础</th><th>通用SNI</th><th>TCP</th><th>TLS</th><th>HTTP</th><th>真实出口</th><th>国家</th><th>CF机房</th><th>入口=出口</th><th>平均测速</th><th>最低</th><th>稳定性</th><th>错误</th>
+</tr></thead><tbody id="tbody"></tbody></table></div></div>
+</div>
+<script>
+let currentJob=null,timer=null,lastData=null;
+const $=id=>document.getElementById(id);
+const auth=()=>({"Authorization":"Bearer "+$("token").value.trim(),"Content-Type":"application/json"});
+$("token").value=localStorage.getItem("rn_proxy_tester_token")||"";
+$("token").addEventListener("change",()=>localStorage.setItem("rn_proxy_tester_token",$("token").value.trim()));
+
+async function start(speedEnabled){
+  const token=$("token").value.trim(),targets=$("targets").value.trim();
+  if(!token||!targets){alert("请填写 Token 和 ProxyIP 列表");return}
+  localStorage.setItem("rn_proxy_tester_token",token);
+  const payload={targets,check_concurrency:Number($("checkConcurrency").value)||50,generic_test:$("generic").checked,
+    speed:{enabled:speedEnabled,concurrency:Number($("speedConcurrency").value)||4,bytes:Number($("speedBytes").value),repeats:Number($("speedRepeats").value)}};
+  const r=await fetch("/api/jobs",{method:"POST",headers:auth(),body:JSON.stringify(payload)});
+  const d=await r.json();if(!r.ok){alert(d.detail||"启动失败");return}
+  currentJob=d.id;$("export").disabled=true;lastData=null;clearInterval(timer);await poll();timer=setInterval(poll,1000);
+}
+$("start").onclick=()=>start(true);$("startNoSpeed").onclick=()=>start(false);
+async function poll(){
+  if(!currentJob)return;
+  const r=await fetch("/api/jobs/"+currentJob,{headers:auth()});if(!r.ok){clearInterval(timer);return}
+  const d=await r.json();lastData=d;render(d);if(d.state==="done"){clearInterval(timer);$("export").disabled=false}
+}
+function text(v){return v===null||v===undefined||v===""?"—":String(v)}
+function yes(v){return v===true?'<span class="ok">✅</span>':v===false?'<span class="bad">❌</span>':'<span class="muted">—</span>'}
+function render(d){
+  $("sTotal").textContent=d.total;$("sDone").textContent=d.completed;$("sAvail").textContent=d.available;$("sSame").textContent=d.same_exit;
+  $("sSpeed").textContent=d.speed_completed||0;$("sState").textContent=d.state;
+  const denom=d.state==="speeding"?(d.speed_total||1):(d.total||1),num=d.state==="speeding"?(d.speed_completed||0):(d.completed||0);
+  $("bar").style.width=Math.min(100,Math.round(num/denom*100))+"%";renderRows(d.results||[]);
+}
+function renderRows(rows){
+  let list=[...rows],f=$("filter").value,s=$("sort").value;
+  if(f==="available")list=list.filter(x=>x.available);if(f==="same")list=list.filter(x=>x.exit_match==="same");if(f==="generic")list=list.filter(x=>x.generic_ok===true);
+  if(s==="speed")list.sort((a,b)=>(b.speed_mbps_avg||-1)-(a.speed_mbps_avg||-1));if(s==="latency")list.sort((a,b)=>(a.tcp_ms??1e9)-(b.tcp_ms??1e9));
+  $("tbody").innerHTML=list.map(x=>`<tr><td><b>${text(x.candidate)}</b></td><td>${yes(x.available)}</td><td>${yes(x.generic_ok)}</td>
+  <td>${text(x.tcp_ms)} ms</td><td>${text(x.tls_ms)} ms</td><td>${text(x.http_status)}</td><td>${text(x.exit_ip)}</td><td>${text(x.country)}</td><td>${text(x.colo)}</td>
+  <td>${x.exit_match==="same"?'<span class="ok">相同</span>':x.exit_match==="different"?'<span class="warn">不同</span>':'—'}</td>
+  <td>${x.speed_mbps_avg?'<b>'+x.speed_mbps_avg+' Mbps</b>':'—'}</td><td>${x.speed_mbps_min?x.speed_mbps_min+' Mbps':'—'}</td>
+  <td>${x.speed_runs?(x.speed_success+'/'+x.speed_runs.length):'—'}</td><td class="bad">${text(x.error||x.generic_error)}</td></tr>`).join("");
+}
+$("filter").onchange=()=>lastData&&renderRows(lastData.results||[]);$("sort").onchange=()=>lastData&&renderRows(lastData.results||[]);
+$("export").onclick=async()=>{
+  if(!currentJob)return;const r=await fetch("/api/jobs/"+currentJob+"/export.csv",{headers:auth()});if(!r.ok){alert("导出失败");return}
+  const b=await r.blob(),u=URL.createObjectURL(b),a=document.createElement("a");a.href=u;a.download="proxyip-"+currentJob+".csv";a.click();URL.revokeObjectURL(u);
+};
+</script></body></html>
