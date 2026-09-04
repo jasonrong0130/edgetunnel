@@ -1,5 +1,6 @@
 // Vendored from cmliu/CF-Workers-CheckProxyIP @ 9e87c9de585289a045fe5afb7e9db0815f195a6d
 // Integrated for EDT admin ProxyIP checking; see THIRD_PARTY_LICENSES/CF-Workers-CheckProxyIP-LICENSE.
+// EDT adaptation: availability is based on TCP + SNI/TLS + verified Cloudflare HTTP reachability; exit JSON is optional.
 const DEFAULT_BEIAN_CONTENT = `© 2025 - 2026 Check ProxyIP · 基于 <a href="https://github.com/cmliu/CF-Workers-CheckProxyIP" target="_blank" rel="noreferrer">Cloudflare Workers 构建与运行</a> · 今日访问人数：<span id="visit-count">···</span> · 站点维护：<a href="https://t.me/CMLiussss" target="_blank" rel="noreferrer">CMLiussss</a>
 <script>
 (function () {
@@ -2964,14 +2965,15 @@ function generateHTML(备案内容) {
 						<div class="guide-card-label">有效特征</div>
 						<h3>有效的 ProxyIP，通常至少满足这些条件</h3>
 						<ul class="guide-list">
-							<li>能够成功建立代理到指定端口（通常为 443）的 TCP 连接</li>
-							<li>具备反向代理 Cloudflare IP 段的 HTTPS 服务能力</li>
+							<li>Worker 能够连接候选 ProxyIP 的指定端口（通常为 443）</li>
+							<li>通过该 ProxyIP 发送指定 SNI 后能够完成 TLS，并收到 Cloudflare 目标的有效 HTTP 响应</li>
+							<li>HTTP 200、301、403、404 等响应都可以证明中转链路已到达目标；出口 JSON 只作为附加信息</li>
 						</ul>
 					</article>
 				</div>
 
 				<div class="guide-tip">
-					<strong>这页检测的意义：</strong>本工具不是只做静态解析，而是尽量模拟真实链路去验证目标是否真的可用，帮助你更快筛掉“看起来在线、实际不可做代理”的候选 IP。
+					<strong>EDT 检测标准：</strong>这里优先判断真实中转链路是否建立成功。只要 TCP、SNI/TLS 正常并确认已经到达 Cloudflare，哪怕探针返回 403/404，也会判定为 EDT ProxyIP 可用；只有拿到 200 JSON 时才额外展示出口 IP、ASN 和地图信息。
 				</div>
 			</section>
 
@@ -5046,16 +5048,30 @@ function generateHTML(备案内容) {
 
 					updateResultFlag(itemObj, flagUrl);
 
+					const successfulProbes = Object.values(data.probe_results || {}).filter(function (probe) {
+						return probe && probe.ok;
+					});
+					const statusText = Array.from(new Set(successfulProbes
+						.map(function (probe) { return probe.status_code ? 'HTTP ' + probe.status_code : ''; })
+						.filter(Boolean))).join(' / ');
+					const detailText = exitIps.length
+						? 'EDT ProxyIP 链路验证通过，并获取到出口信息。'
+						: 'EDT ProxyIP 链路验证通过：TCP、SNI/TLS 与 Cloudflare 响应正常' + (statusText ? '（' + statusText + '）' : '') + '。';
+
 					itemObj.info.innerHTML =
 						'<span class="result-label">候选目标</span>' +
 						buildCopyableTarget(data.candidate || target) +
-						'<span class="result-detail">代理验证通过，可继续查看出口位置、网络信息和地图分布。</span>';
+						'<span class="result-detail">' + detailText + '</span>';
 
-					const metaParts = [
-						buildMetaChip(locations, 'location'),
-						buildMetaChip(networks, 'network'),
-						buildMetaChip(exitIps.length + '个出口', 'exits')
-					];
+					const metaParts = [buildMetaChip('EDT链路可用', 'info')];
+					if (statusText) metaParts.push(buildMetaChip(statusText, 'info'));
+					if (exitIps.length) {
+						metaParts.push(buildMetaChip(locations, 'location'));
+						metaParts.push(buildMetaChip(networks, 'network'));
+						metaParts.push(buildMetaChip(exitIps.length + '个出口', 'exits'));
+					} else {
+						metaParts.push(buildMetaChip('未返回出口 JSON，不影响 EDT 链路可用性', 'info'));
+					}
 					itemObj.meta.innerHTML = metaParts.join('');
 
 					renderExitList(itemObj.exitList, exitIps);
@@ -5068,7 +5084,7 @@ function generateHTML(备案内容) {
 					itemObj.info.innerHTML =
 						'<span class="result-label">候选目标</span>' +
 						buildCopyableTarget(target) +
-						'<span class="result-detail">无法通过该代理访问 Cloudflare，请更换目标后重试。</span>';
+						'<span class="result-detail">未完成 EDT 所需的 TCP / SNI / TLS / Cloudflare 响应验证；请查看错误信息定位失败阶段。</span>';
 					itemObj.meta.innerHTML =
 						buildMetaChip('检测未通过', 'error', 'meta-chip-danger') +
 						buildMetaChip(data.message || '远端返回失败结果', 'info');
@@ -5633,15 +5649,18 @@ async function handleCheckProxyRequest(req) {
 							ok,
 							resultStatusCode,
 							error,
-							{ exit = null } = {}
+							{ exit = null, cloudflareReached = false, chainVerified = false } = {}
 						) => ({
 
 							candidate: candidate.raw,
+							probe_host: target.host,
 							connect_ms: connectMs,
 							tls_ms: tlsMs,
 							http_ms: httpMs,
 							status_code: resultStatusCode,
 							ok,
+							cloudflare_reached: cloudflareReached,
+							chain_verified: chainVerified,
 							error,
 							exit,
 						});
@@ -5705,20 +5724,30 @@ async function handleCheckProxyRequest(req) {
 							}
 							const responseText = dec.decode(responseBodyBytes);
 
-							if (statusCode !== 200) {
-								const bodyPreview = responseText ? ` body: ${responseText.slice(0, 120)}` : '';
-								return buildResult(false, statusCode, `unexpected status: ${statusCode ?? 'unknown'}${bodyPreview}`);
+							const hasHttpResponse = Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599;
+							const cloudflareHeader = /(?:^|\r\n)(?:server:\s*cloudflare\b|cf-ray:\s*[^\r\n]+)/i.test(headerText);
+							let payload = null;
+							let exit = null;
+
+							if (statusCode === 200 && responseText) {
+								try {
+									payload = JSON.parse(responseText);
+									if (pickExitIp(payload)) exit = payload;
+								} catch (_) {
+									// EDT 可用性不依赖探针 JSON；HTTP + Cloudflare 响应已足够证明 SNI/TLS 中转链路。
+								}
 							}
 
-							let payload;
-							try {
-								payload = JSON.parse(responseText);
-							} catch (error) {
-								return buildResult(false, statusCode, `invalid json response: ${String(error?.message || error)}`);
+							const cloudflareReached = cloudflareHeader || Boolean(exit);
+							if (hasHttpResponse && cloudflareReached) {
+								const note = statusCode === 200
+									? (exit ? null : 'HTTP 200 reached Cloudflare; exit metadata unavailable')
+									: `HTTP ${statusCode} reached Cloudflare; EDT SNI/TLS chain verified`;
+								return buildResult(true, statusCode, note, { exit, cloudflareReached: true, chainVerified: true });
 							}
 
-							if (!pickExitIp(payload)) return buildResult(false, statusCode, 'probe json missing exit ip');
-							return buildResult(true, statusCode, null, { exit: payload });
+							if (!hasHttpResponse) return buildResult(false, statusCode, 'no valid HTTP response after TLS handshake');
+							return buildResult(false, statusCode, `HTTP ${statusCode} received, but Cloudflare probe was not verified`);
 						} catch (error) {
 							return buildResult(false, statusCode, String(error?.message || error));
 						} finally {
@@ -5748,9 +5777,13 @@ async function handleCheckProxyRequest(req) {
 					? Math.ceil(probeResults.reduce((s, r) => s + (Number.isFinite(r?.connect_ms) ? r.connect_ms : 0), 0) / probeResults.length)
 					: 0;
 
+				const edtChainOk = probeResults.some((result) => result?.chain_verified === true);
 				return {
 					candidate: rawCandidate,
-					success: probeResults.some((result) => result.ok),
+					success: edtChainOk,
+					edt_chain_ok: edtChainOk,
+					validation_mode: 'edt_sni_tls_http',
+					cloudflare_reached: probeResults.some((result) => result?.cloudflare_reached === true),
 					proxyIP: candidate.hostname,
 					portRemote: candidate.port,
 					inferred_stack: inferredStack,
