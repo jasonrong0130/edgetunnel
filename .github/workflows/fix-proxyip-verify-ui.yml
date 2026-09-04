@@ -44,3 +44,5 @@ jobs:
           git rm -f .github/fix_patch_helper.py .github/patch_proxyip_verify.py .github/workflows/fix-proxyip-verify-ui.yml
           git commit -m "feat: verify ProxyIP availability before adding node"
           git push origin HEAD:feature/force-proxyip
+
+# retry after escape normalization
