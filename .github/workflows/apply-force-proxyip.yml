@@ -1,0 +1,122 @@
+name: Apply force ProxyIP patch
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/apply-force-proxyip.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch _worker.js
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('_worker.js')
+          text = path.read_text(encoding='utf-8-sig')
+
+          def replace_once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, got {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "const 链式代理匹配 = 节点备注.match(/\\$(socks5|http|https|turn|sstp):\\/\\/([^#\\s]+)/i);",
+              "const 链式代理匹配 = 节点备注.match(/\\$(socks5|http|https|turn|sstp|proxyip):\\/\\/([^#\\s]+)/i);",
+              'extend chain proxy syntax',
+          )
+
+          replace_once(
+              "\t\t\t\t\t\tconst 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };\n\t\t\t\t\t\t完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;",
+              "\t\t\t\t\t\tif (代理协议 === 'proxyip') {\n\t\t\t\t\t\t\t完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${代理参数}`).replace(/\\/\\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');\n\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\tconst 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };\n\t\t\t\t\t\t\t完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;\n\t\t\t\t\t\t}",
+              'generate force ProxyIP node path',
+          )
+
+          replace_once(
+              "let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底;",
+              "let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底, 强制ProxyIP = false;",
+              'add force ProxyIP parser state',
+          )
+
+          replace_once(
+              "const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底 };",
+              "const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底, 强制ProxyIP: false };",
+              'add force ProxyIP context field',
+          )
+
+          replace_once(
+              "\t\t反代上下文.反代兜底 = 启用反代兜底;\n\t};",
+              "\t\t反代上下文.反代兜底 = 启用反代兜底;\n\t\t反代上下文.强制ProxyIP = 强制ProxyIP;\n\t};",
+              'persist force ProxyIP context',
+          )
+
+          replace_once(
+              "\tconst 查询反代IP = searchParams.get('proxyip');",
+              "\tconst 强制反代IP匹配 = /\\/forceproxyip=([^?#\\s]+)/i.exec(pathname);\n\tif (强制反代IP匹配) {\n\t\tconst 强制反代值 = 提取路径值(强制反代IP匹配[1]);\n\t\tif (!强制反代值) throw new Error('强制 ProxyIP 地址为空');\n\t\t设置反代IP(强制反代值);\n\t\t强制ProxyIP = true;\n\t\t保存快照();\n\t\treturn 反代上下文;\n\t}\n\n\tconst 查询反代IP = searchParams.get('proxyip');",
+              'parse force ProxyIP path',
+          )
+
+          replace_once(
+              "\tconst ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;",
+              "\tconst ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;\n\tconst ctx强制ProxyIP = 反代上下文.强制ProxyIP === true;",
+              'read force ProxyIP forwarding state',
+          )
+
+          replace_once(
+              "\tlog(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);",
+              "\tlog(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'} | 强制ProxyIP: ${ctx强制ProxyIP ? '是' : '否'}`);",
+              'log force ProxyIP state',
+          )
+
+          replace_once(
+              "\tif (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {",
+              "\tif (ctx强制ProxyIP) {\n\t\tlog(`[TCP转发] 启用强制 ProxyIP: ${ctx反代IP}`);\n\t\ttry {\n\t\t\tawait connecttoPry();\n\t\t\tif (仅建立连接) return remoteConnWrapper.socket;\n\t\t} catch (err) {\n\t\t\tlog(`[TCP转发] 强制 ProxyIP 连接失败: ${err.message}`);\n\t\t\tthrow err;\n\t\t}\n\t} else if (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {",
+              'force ProxyIP before direct dial',
+          )
+
+          speed_old = "isSpeedTestSite(hostname) && 反代上下文.代理类型 === null"
+          speed_count = text.count(speed_old)
+          if speed_count < 1:
+              raise SystemExit('speed-test bypass guard: expected at least 1 match')
+          text = text.replace(speed_old, speed_old + " && !反代上下文.强制ProxyIP")
+          print(f'patched {speed_count} speed-test bypass guard(s)')
+
+          required = [
+              "$proxyip://",
+              "forceproxyip=",
+              "ctx强制ProxyIP",
+              "反代上下文.强制ProxyIP",
+              "启用强制 ProxyIP",
+          ]
+          for marker in required:
+              if marker not in text:
+                  raise SystemExit(f'missing marker after patch: {marker}')
+
+          path.write_text(text, encoding='utf-8-sig')
+
+      - name: Syntax check
+        run: |
+          node --check _worker.js
+          git diff --check
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _worker.js
+          git commit -m "feat: add per-node forced ProxyIP mode"
+          git push origin HEAD:feature/force-proxyip
