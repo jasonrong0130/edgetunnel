@@ -109,6 +109,28 @@ async function 检测ProxyIP可用性(request, proxyValue) {
 	}
 }
 
+async function 处理ProxyIP验证WS(request, proxyValue) {
+	const WS套接字对 = new WebSocketPair();
+	const [clientSock, serverSock] = Object.values(WS套接字对);
+	try { (/** @type {any} */ (serverSock)).accept({ allowHalfOpen: true }) }
+	catch (_) { serverSock.accept() }
+
+	const 发送并关闭 = (payload) => {
+		try { serverSock.send(JSON.stringify(payload)) } catch (_) { }
+		setTimeout(() => { try { serverSock.close(1000, 'done') } catch (_) { } }, 20);
+	};
+
+	Promise.resolve().then(async () => {
+		try {
+			发送并关闭(await 检测ProxyIP可用性(request, proxyValue));
+		} catch (err) {
+			发送并关闭({ success: false, msg: 'ProxyIP链路验证失败：' + (err?.message || err), error: err?.message || String(err) });
+		}
+	});
+
+	return new Response(null, { status: 101, webSocket: clientSock });
+}
+
 async function 注入ProxyIP后台入口(response) {
 	try {
 		const html = await response.text();
@@ -237,10 +259,39 @@ async function 注入ProxyIP后台入口(response) {
 			if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = '验证中...'; }
 			if (addBtn) addBtn.disabled = true;
 			setProxyIpStatus('checking', '正在验证 Worker → ProxyIP → 目标站点链路...');
-			const resp = await nativeFetch('/admin/check?proxyip=' + encodeURIComponent(proxyip) + '&_t=' + Date.now(), { cache: 'no-store' });
-			let data = {};
-			try { data = await resp.json(); } catch (_) {}
-			if (!resp.ok || !data.success) throw new Error(data.msg || data.error || ('HTTP ' + resp.status));
+			const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+			const wsUrl = scheme + '//' + location.host + '/admin/proxyip-check-ws?proxyip=' + encodeURIComponent(proxyip) + '&_t=' + Date.now();
+			const data = await new Promise((resolve, reject) => {
+				let settled = false;
+				const ws = new WebSocket(wsUrl);
+				const timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					try { ws.close() } catch (_) {}
+					reject(new Error('ProxyIP WebSocket验证超时'));
+				}, 15000);
+				ws.onmessage = (event) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					try { resolve(JSON.parse(String(event.data || '{}'))) }
+					catch (_) { reject(new Error('ProxyIP验证响应格式无效')) }
+					try { ws.close() } catch (_) {}
+				};
+				ws.onerror = () => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					reject(new Error('ProxyIP WebSocket验证连接失败'));
+				};
+				ws.onclose = () => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					reject(new Error('ProxyIP验证通道提前关闭'));
+				};
+			});
+			if (!data.success) throw new Error(data.msg || data.error || 'ProxyIP链路验证失败');
 			if (key !== getProxyIpValidationKey()) throw new Error('参数已变化，请重新验证');
 			proxyIpValidatedKey = key;
 			if (addBtn) addBtn.disabled = false;
@@ -448,6 +499,13 @@ export default {
 				}
 				if (请求前8总和 === 目标前8总和 && 请求UUID.slice(-12) === 目标UUID.slice(-12)) return new Response(JSON.stringify({ Version: Number(String(Version).replace(/\D+/g, '')) }), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 			}
+		} else if (管理员密码 && upgradeHeader === 'websocket' && 访问路径 === 'admin/proxyip-check-ws') {// ProxyIP 可用性验证：使用与正式节点一致的 WebSocket 请求上下文
+			const cookies = request.headers.get('Cookie') || '';
+			const authCookie = cookies.split(';').find(c => c.trim().startsWith('auth='))?.split('=')[1];
+			if (!authCookie || authCookie !== await MD5MD5(UA + 加密秘钥 + 管理员密码)) return new Response('Unauthorized', { status: 403 });
+			const proxyValue = url.searchParams.get('proxyip');
+			if (!proxyValue) return new Response('Missing proxyip', { status: 400 });
+			return await 处理ProxyIP验证WS(request, proxyValue);
 		} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
 			log(`[WebSocket] 命中请求: ${url.pathname}${url.search}`);
