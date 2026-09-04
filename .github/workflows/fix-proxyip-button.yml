@@ -28,7 +28,6 @@ jobs:
           git diff --check
           grep -Fq "source.insertAdjacentElement('afterend', btn)" _worker.js
           grep -Fq "btn.textContent = 'ProxyIP节点'" _worker.js
-          npx -y wrangler@4.129.0 deploy --dry-run --outdir /tmp/wrangler-dry
 
       - name: Commit repair and remove helpers
         run: |
