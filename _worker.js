@@ -68,6 +68,13 @@ async function 注入ProxyIP后台入口(response) {
 		}
 
 		let body = html;
+		// 与原版“链式代理”按钮采用同样的静态 DOM 实现：直接放在同一 module-footer 内。
+		const chainButtonMarker = 'onclick="openChainProxyModal()">链式代理</button>';
+		if (!body.includes('id="proxyIpNodeBtn"')) {
+			if (!body.includes(chainButtonMarker)) throw new Error('未找到原版链式代理按钮');
+			const proxyButton = '\n\t\t\t\t\t\t<button type="button" class="btn btn-chain-proxy hidden-section proxyip-node-btn" id="proxyIpNodeBtn" onclick="openProxyIpModal()">ProxyIP节点</button>';
+			body = body.replace(chainButtonMarker, chainButtonMarker + proxyButton);
+		}
 
 		const injected = String.raw`
 <style data-custom-proxyip-ui="1">
@@ -255,7 +262,8 @@ async function 注入ProxyIP后台入口(response) {
 })();
 </script>`;
 
-		body = /<\/body>/i.test(body) ? body.replace(/<\/body>/i, injected + '</body>') : body + injected;
+		const bodyCloseIndex = body.toLowerCase().lastIndexOf('</body>');
+		body = bodyCloseIndex >= 0 ? body.slice(0, bodyCloseIndex) + injected + body.slice(bodyCloseIndex) : body + injected;
 		const headers = new Headers(response.headers);
 		headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
 		return new Response(body, { status: response.status, statusText: response.statusText, headers });
