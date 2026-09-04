@@ -589,6 +589,9 @@ export default {
 								完整优选IP = 完整优选IP.concat(优选生成器IP数组);
 								其他节点LINK += 优选生成器其他节点;
 							}
+							// 自定义 ProxyIP 节点应独立追加到订阅，不受随机优选/ADD/远程订阅生成模式影响。
+							const 隐藏ProxyIP节点列表 = Object.keys(自定义ProxyIP节点映射);
+							if (隐藏ProxyIP节点列表.length) 完整优选IP = [...new Set(完整优选IP.concat(隐藏ProxyIP节点列表))];
 							const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
 							const isLoonOrSurge = ua.includes('loon') || ua.includes('surge');
 							const { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
