@@ -43,7 +43,11 @@ jobs:
         run: |
           node --check _worker.js
           git diff --check
-          grep -Fq 'customIPs.split(/\\r?\\n/)' _worker.js
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('_worker.js').read_text(encoding='utf-8')
+          assert "customIPs.split(/\\r?\\n/)" in text
+          PY
           npx -y wrangler@4.129.0 deploy --dry-run --outdir /tmp/wrangler-dry
 
       - name: Commit repair and remove helper
