@@ -1,0 +1,33 @@
+name: Diagnose ProxyIP admin script
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/diagnose-proxyip-ui.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+      - name: Extract and syntax-check injected browser script
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('_worker.js').read_text(encoding='utf-8-sig')
+          start_marker = '<script data-custom-proxyip-ui="1">'
+          start = s.index(start_marker) + len(start_marker)
+          end = s.index('</script>`;', start)
+          js = s[start:end]
+          Path('/tmp/proxyip-ui.js').write_text(js, encoding='utf-8')
+          print(js[:1200])
+          PY
+          node --check /tmp/proxyip-ui.js
