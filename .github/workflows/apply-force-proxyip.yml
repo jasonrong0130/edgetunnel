@@ -23,6 +23,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           path = Path('_worker.js')
           text = path.read_text(encoding='utf-8-sig')
@@ -35,16 +36,26 @@ jobs:
               text = text.replace(old, new, 1)
 
           replace_once(
-              "const 链式代理匹配 = 节点备注.match(/\\$(socks5|http|https|turn|sstp):\\/\\/([^#\\s]+)/i);",
-              "const 链式代理匹配 = 节点备注.match(/\\$(socks5|http|https|turn|sstp|proxyip):\\/\\/([^#\\s]+)/i);",
+              r"const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp):\/\/([^#\s]+)/i);",
+              r"const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp|proxyip):\/\/([^#\s]+)/i);",
               'extend chain proxy syntax',
           )
 
-          replace_once(
-              "\t\t\t\t\t\tconst 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };\n\t\t\t\t\t\t完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;",
-              "\t\t\t\t\t\tif (代理协议 === 'proxyip') {\n\t\t\t\t\t\t\t完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${代理参数}`).replace(/\\/\\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');\n\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\tconst 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };\n\t\t\t\t\t\t\t完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;\n\t\t\t\t\t\t}",
-              'generate force ProxyIP node path',
+          old = """const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
+                                            完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;"""
+          m = re.search(r"(?P<indent>\s*)const 链式代理数据 = \{ type: 代理协议, \.\.\.获取SOCKS5账号\(代理参数, 获取代理默认端口\(代理协议\)\) \};\n(?P=indent)完整节点路径 = `/video/\$\{base64SecretEncode\(JSON\.stringify\(链式代理数据\), userID\) \+ \(config_JSON\.启用0RTT \? '\?ed=2560' : ''\)\}`;", text)
+          if not m:
+              raise SystemExit('generate force ProxyIP node path: pattern not found')
+          indent = m.group('indent')
+          replacement = (
+              f"{indent}if (代理协议 === 'proxyip') {{\n"
+              f"{indent}\t完整节点路径 = (`${{config_JSON.PATH}}/forceproxyip=${{代理参数}}`).replace(/\\/\\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');\n"
+              f"{indent}}} else {{\n"
+              f"{indent}\tconst 链式代理数据 = {{ type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) }};\n"
+              f"{indent}\t完整节点路径 = `/video/${{base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}}`;\n"
+              f"{indent}}}"
           )
+          text = text[:m.start()] + replacement + text[m.end():]
 
           replace_once(
               "let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底;",
@@ -95,14 +106,7 @@ jobs:
           text = text.replace(speed_old, speed_old + " && !反代上下文.强制ProxyIP")
           print(f'patched {speed_count} speed-test bypass guard(s)')
 
-          required = [
-              "$proxyip://",
-              "forceproxyip=",
-              "ctx强制ProxyIP",
-              "反代上下文.强制ProxyIP",
-              "启用强制 ProxyIP",
-          ]
-          for marker in required:
+          for marker in ["forceproxyip=", "ctx强制ProxyIP", "反代上下文.强制ProxyIP", "启用强制 ProxyIP"]:
               if marker not in text:
                   raise SystemExit(f'missing marker after patch: {marker}')
 
