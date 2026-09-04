@@ -5,7 +5,7 @@ on:
     branches:
       - feature/force-proxyip
     paths:
-      - .github/workflows/apply-force-proxyip.yml
+      - '.github/workflows/apply-force-proxyip.yml'
 
 permissions:
   contents: write
@@ -14,113 +14,142 @@ jobs:
   patch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: feature/force-proxyip
           fetch-depth: 0
 
-      - name: Patch _worker.js
-        shell: python
+      - name: Apply patch
         run: |
+          python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          path = Path('_worker.js')
-          text = path.read_text(encoding='utf-8-sig')
+          p = Path('_worker.js')
+          text = p.read_text(encoding='utf-8-sig')
+          lines = text.splitlines()
 
-          def replace_once(old, new, label):
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly 1 match, got {count}')
-              text = text.replace(old, new, 1)
+          def only_index(stripped, label):
+              hits = [i for i, line in enumerate(lines) if line.strip() == stripped]
+              if len(hits) != 1:
+                  raise SystemExit(f'{label}: expected 1 exact line, got {len(hits)}')
+              return hits[0]
 
-          replace_once(
-              r"const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp):\/\/([^#\s]+)/i);",
-              r"const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp|proxyip):\/\/([^#\s]+)/i);",
-              'extend chain proxy syntax',
-          )
+          # 1) Accept $proxyip://... in a node remark.
+          old_chain = r"const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp):\/\/([^#\s]+)/i);"
+          i = only_index(old_chain, 'chain syntax')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines[i] = indent + r"const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp|proxyip):\/\/([^#\s]+)/i);"
 
-          old = """const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
-                                            完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}`;"""
-          m = re.search(r"(?P<indent>\s*)const 链式代理数据 = \{ type: 代理协议, \.\.\.获取SOCKS5账号\(代理参数, 获取代理默认端口\(代理协议\)\) \};\n(?P=indent)完整节点路径 = `/video/\$\{base64SecretEncode\(JSON\.stringify\(链式代理数据\), userID\) \+ \(config_JSON\.启用0RTT \? '\?ed=2560' : ''\)\}`;", text)
-          if not m:
-              raise SystemExit('generate force ProxyIP node path: pattern not found')
-          indent = m.group('indent')
-          replacement = (
-              f"{indent}if (代理协议 === 'proxyip') {{\n"
-              f"{indent}\t完整节点路径 = (`${{config_JSON.PATH}}/forceproxyip=${{代理参数}}`).replace(/\\/\\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');\n"
-              f"{indent}}} else {{\n"
-              f"{indent}\tconst 链式代理数据 = {{ type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) }};\n"
-              f"{indent}\t完整节点路径 = `/video/${{base64SecretEncode(JSON.stringify(链式代理数据), userID) + (config_JSON.启用0RTT ? '?ed=2560' : '')}}`;\n"
-              f"{indent}}}"
-          )
-          text = text[:m.start()] + replacement + text[m.end():]
+          # 2) For proxyip, emit an explicit forceproxyip path instead of /video/<encoded proxy config>.
+          chain_data = "const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };"
+          i = only_index(chain_data, 'chain node generation')
+          if i + 1 >= len(lines) or not lines[i + 1].strip().startswith("完整节点路径 = `/video/${base64SecretEncode(JSON.stringify(链式代理数据), userID)"):
+              raise SystemExit('chain node generation: expected /video line immediately after proxy data line')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          original_video_line = lines[i + 1].strip()
+          lines[i:i + 2] = [
+              indent + "if (代理协议 === 'proxyip') {",
+              indent + "\t完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${代理参数}`).replace(/\\/\\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');",
+              indent + "} else {",
+              indent + "\t" + chain_data,
+              indent + "\t" + original_video_line,
+              indent + "}",
+          ]
 
-          replace_once(
-              "let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底;",
-              "let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底, 强制ProxyIP = false;",
-              'add force ProxyIP parser state',
-          )
+          # 3) Add a force flag to the per-request reverse-proxy context.
+          parser_state = "let 反代IP = 默认反代IP, 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {}, 启用反代兜底 = 默认反代兜底;"
+          i = only_index(parser_state, 'proxy parser state')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines[i] = indent + parser_state[:-1] + ", 强制ProxyIP = false;"
 
-          replace_once(
-              "const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底 };",
-              "const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底, 强制ProxyIP: false };",
-              'add force ProxyIP context field',
-          )
+          context_line = "const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底 };"
+          i = only_index(context_line, 'proxy context')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines[i] = indent + "const 反代上下文 = { 木马反代地址: null, 反代IP, 代理类型: null, 代理账号: '', 代理全局: false, 代理参数: {}, 反代兜底: 启用反代兜底, 强制ProxyIP: false };"
 
-          replace_once(
-              "\t\t反代上下文.反代兜底 = 启用反代兜底;\n\t};",
-              "\t\t反代上下文.反代兜底 = 启用反代兜底;\n\t\t反代上下文.强制ProxyIP = 强制ProxyIP;\n\t};",
-              'persist force ProxyIP context',
-          )
+          snapshot_line = "反代上下文.反代兜底 = 启用反代兜底;"
+          i = only_index(snapshot_line, 'proxy snapshot')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines.insert(i + 1, indent + "反代上下文.强制ProxyIP = 强制ProxyIP;")
 
-          replace_once(
-              "\tconst 查询反代IP = searchParams.get('proxyip');",
-              "\tconst 强制反代IP匹配 = /\\/forceproxyip=([^?#\\s]+)/i.exec(pathname);\n\tif (强制反代IP匹配) {\n\t\tconst 强制反代值 = 提取路径值(强制反代IP匹配[1]);\n\t\tif (!强制反代值) throw new Error('强制 ProxyIP 地址为空');\n\t\t设置反代IP(强制反代值);\n\t\t强制ProxyIP = true;\n\t\t保存快照();\n\t\treturn 反代上下文;\n\t}\n\n\tconst 查询反代IP = searchParams.get('proxyip');",
-              'parse force ProxyIP path',
-          )
+          # 4) Parse /forceproxyip=HOST:PORT before ordinary proxyip handling.
+          query_line = "const 查询反代IP = searchParams.get('proxyip');"
+          i = only_index(query_line, 'ordinary proxyip query')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          force_parser = [
+              indent + r"const 强制反代IP匹配 = /\/forceproxyip=([^?#\s]+)/i.exec(pathname);",
+              indent + "if (强制反代IP匹配) {",
+              indent + "\tconst 强制反代值 = 提取路径值(强制反代IP匹配[1]);",
+              indent + "\tif (!强制反代值) throw new Error('强制 ProxyIP 地址为空');",
+              indent + "\t设置反代IP(强制反代值);",
+              indent + "\t强制ProxyIP = true;",
+              indent + "\t保存快照();",
+              indent + "\treturn 反代上下文;",
+              indent + "}",
+              "",
+          ]
+          lines[i:i] = force_parser
 
-          replace_once(
-              "\tconst ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;",
-              "\tconst ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;\n\tconst ctx强制ProxyIP = 反代上下文.强制ProxyIP === true;",
-              'read force ProxyIP forwarding state',
-          )
+          # 5) Make forwardataTCP skip direct dialing when forced ProxyIP is selected.
+          forward_state = "const ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;"
+          i = only_index(forward_state, 'forward proxy state')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines.insert(i + 1, indent + "const ctx强制ProxyIP = 反代上下文.强制ProxyIP === true;")
 
-          replace_once(
-              "\tlog(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);",
-              "\tlog(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'} | 强制ProxyIP: ${ctx强制ProxyIP ? '是' : '否'}`);",
-              'log force ProxyIP state',
-          )
+          log_prefix = "log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);"
+          i = only_index(log_prefix, 'forward log')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines[i] = indent + "log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'} | 强制ProxyIP: ${ctx强制ProxyIP ? '是' : '否'}`);"
 
-          replace_once(
-              "\tif (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {",
-              "\tif (ctx强制ProxyIP) {\n\t\tlog(`[TCP转发] 启用强制 ProxyIP: ${ctx反代IP}`);\n\t\ttry {\n\t\t\tawait connecttoPry();\n\t\t\tif (仅建立连接) return remoteConnWrapper.socket;\n\t\t} catch (err) {\n\t\t\tlog(`[TCP转发] 强制 ProxyIP 连接失败: ${err.message}`);\n\t\t\tthrow err;\n\t\t}\n\t} else if (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {",
-              'force ProxyIP before direct dial',
-          )
+          branch_prefix = "if (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {"
+          i = only_index(branch_prefix, 'global proxy branch')
+          indent = lines[i][:-len(lines[i].lstrip())]
+          lines[i:i + 1] = [
+              indent + "if (ctx强制ProxyIP) {",
+              indent + "\tlog(`[TCP转发] 启用强制 ProxyIP: ${ctx反代IP}`);",
+              indent + "\ttry {",
+              indent + "\t\tawait connecttoPry();",
+              indent + "\t\tif (仅建立连接) return remoteConnWrapper.socket;",
+              indent + "\t} catch (err) {",
+              indent + "\t\tlog(`[TCP转发] 强制 ProxyIP 连接失败: ${err.message}`);",
+              indent + "\t\tthrow err;",
+              indent + "\t}",
+              indent + "} else " + branch_prefix,
+          ]
 
-          speed_old = "isSpeedTestSite(hostname) && 反代上下文.代理类型 === null"
-          speed_count = text.count(speed_old)
-          if speed_count < 1:
-              raise SystemExit('speed-test bypass guard: expected at least 1 match')
-          text = text.replace(speed_old, speed_old + " && !反代上下文.强制ProxyIP")
-          print(f'patched {speed_count} speed-test bypass guard(s)')
+          # 6) Do not let the built-in local speed-test shortcut bypass a forced ProxyIP node.
+          patched = '\n'.join(lines) + '\n'
+          speed_guard = "isSpeedTestSite(hostname) && 反代上下文.代理类型 === null"
+          count = patched.count(speed_guard)
+          if count < 1:
+              raise SystemExit('speed-test guards: none found')
+          patched = patched.replace(speed_guard, speed_guard + " && !反代上下文.强制ProxyIP")
+          print(f'patched {count} speed-test guard(s)')
 
-          for marker in ["forceproxyip=", "ctx强制ProxyIP", "反代上下文.强制ProxyIP", "启用强制 ProxyIP"]:
-              if marker not in text:
+          for marker in [
+              "socks5|http|https|turn|sstp|proxyip",
+              "forceproxyip=",
+              "强制ProxyIP = true",
+              "ctx强制ProxyIP",
+              "启用强制 ProxyIP",
+          ]:
+              if marker not in patched:
                   raise SystemExit(f'missing marker after patch: {marker}')
 
-          path.write_text(text, encoding='utf-8-sig')
+          p.write_text(patched, encoding='utf-8-sig')
+          PY
 
-      - name: Syntax check
+      - name: Syntax and diff checks
         run: |
           node --check _worker.js
           git diff --check
+          git diff -- _worker.js
 
-      - name: Commit patch
+      - name: Commit tested patch and remove helper workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add _worker.js
+          git rm .github/workflows/apply-force-proxyip.yml
           git commit -m "feat: add per-node forced ProxyIP mode"
           git push origin HEAD:feature/force-proxyip
