@@ -432,6 +432,12 @@ export default {
 		const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 		const envUUID = env.UUID || env.uuid;
 		const userID = (envUUID && uuidRegex.test(envUUID)) ? envUUID.toLowerCase() : [userIDMD5.slice(0, 8), userIDMD5.slice(8, 12), '4' + userIDMD5.slice(13, 16), '8' + userIDMD5.slice(17, 20), userIDMD5.slice(20)].join('-');
+		const EDT探针UUID原始值 = String(env.EDT_PROBE_UUID || '').trim().toLowerCase();
+		const EDT探针目标主机 = String(env.EDT_PROBE_TARGET_HOST || 'www.cloudflare.com').trim().toLowerCase().replace(/\.$/, '') || 'www.cloudflare.com';
+		const EDT探针目标端口数值 = Number(env.EDT_PROBE_TARGET_PORT || 443);
+		const EDT探针配置 = uuidRegex.test(EDT探针UUID原始值) && EDT探针UUID原始值 !== userID
+			? { uuid: EDT探针UUID原始值, targetHost: EDT探针目标主机, targetPort: Number.isInteger(EDT探针目标端口数值) && EDT探针目标端口数值 >= 1 && EDT探针目标端口数值 <= 65535 ? EDT探针目标端口数值 : 443 }
+			: null;
 		const hosts = env.HOST ? (await 整理成数组(env.HOST)).map(h => h.toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0]) : [url.hostname];
 		const host = hosts[0];
 		const 访问路径 = url.pathname.slice(1).toLowerCase();
@@ -467,7 +473,8 @@ export default {
 		} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
 			log(`[WebSocket] 命中请求: ${url.pathname}${url.search}`);
-			return await 处理WS请求(request, userID, url, 反代上下文);
+			const 当前请求允许EDT探针 = !!(EDT探针配置 && /\/forceproxyip=[^?#\s]+/i.test(url.pathname));
+			return await 处理WS请求(request, userID, url, 反代上下文, 当前请求允许EDT探针 ? EDT探针配置 : null);
 		} else if (管理员密码 && !访问路径.startsWith('admin/') && 访问路径 !== 'login' && request.method === 'POST') {// gRPC/叉HTTP代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
 			const { 头: 本机Padding头, 键: 本机Padding键 } = 获取叉HTTPPadding标识(userID);
@@ -1728,7 +1735,7 @@ function 解码WS早期数据(header, token) {
 }
 
 ///////////////////////////////////////////////////////////////////////WS传输数据///////////////////////////////////////////////
-async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
+async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}, EDT探针配置 = null) {
 	const WS套接字对 = new WebSocketPair();
 	const [clientSock, serverSock] = Object.values(WS套接字对);
 	try { (/** @type {any} */ (serverSock)).accept({ allowHalfOpen: true }) }
@@ -2126,9 +2133,16 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			判断是否是木马 = false;
 			当前块字节 = 当前块字节 || 数据转Uint8Array(chunk);
 			const bytes = 当前块字节;
-			const 解析结果 = 解析魏烈思请求(bytes, yourUUID);
+			const 解析结果 = 解析魏烈思请求(bytes, yourUUID, EDT探针配置?.uuid || '');
+			const 使用EDT探针UUID = !!(EDT探针配置?.uuid && !UUID字节匹配(bytes, 1, yourUUID) && UUID字节匹配(bytes, 1, EDT探针配置.uuid));
 			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid 魏烈思 request');
 			const { port, hostname, version, isUDP, rawClientData } = 解析结果;
+			if (使用EDT探针UUID) {
+				const 实际探针主机 = String(hostname || '').toLowerCase().replace(/\.$/, '');
+				if (isUDP || 实际探针主机 !== EDT探针配置.targetHost || Number(port) !== EDT探针配置.targetPort) {
+					throw new Error('EDT probe UUID target is restricted');
+				}
+			}
 			const respHeader = new Uint8Array([version, 0]);
 			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null && !反代上下文.强制ProxyIP) {
 				await 启用WS本地测速模式(serverSock, respHeader, rawClientData);
@@ -2402,12 +2416,14 @@ function UUID字节匹配(data, offset, uuid) {
 	return true;
 }
 
-function 解析魏烈思请求(chunk, token) {
+function 解析魏烈思请求(chunk, token, alternateToken = '') {
 	const data = 数据转Uint8Array(chunk);
 	const length = data.byteLength;
 	if (length < 24) return { hasError: true, message: 'Invalid data' };
 	const version = data[0];
-	if (!UUID字节匹配(data, 1, token)) return { hasError: true, message: 'Invalid uuid' };
+	const 主UUID匹配 = UUID字节匹配(data, 1, token);
+	const 备用UUID匹配 = !主UUID匹配 && alternateToken && UUID字节匹配(data, 1, alternateToken);
+	if (!主UUID匹配 && !备用UUID匹配) return { hasError: true, message: 'Invalid uuid' };
 
 	const optLen = data[17];
 	const cmdIndex = 18 + optLen;
