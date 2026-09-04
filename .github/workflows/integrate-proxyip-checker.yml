@@ -14,6 +14,7 @@ permissions:
 jobs:
   patch:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +45,6 @@ jobs:
           grep -Fq 'id="btnVerifyProxyIp"' _worker.js
           grep -Fq "window.open('about:blank', '_blank')" _worker.js
           grep -Fq "/admin/proxyip-checker/check?proxyip=" _worker.js
-          npx --yes wrangler@4.129.0 deploy --dry-run --outdir=/tmp/wrangler-dry
 
       - name: Commit and clean helper
         shell: bash
