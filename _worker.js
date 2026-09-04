@@ -114,7 +114,7 @@ async function 注入ProxyIP后台入口(response) {
 				</div>
 			</div>
 		</div>
-		<p class="proxyip-save-hint">先按原版“获取更多 PROXYIP”的方式验证可用性；验证通过后才可添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。</p>
+		<p class="proxyip-save-hint">可用性验证为可选项；点击验证会将 ProxyIP 主机提交给原版第三方检测服务，仅作参考，不影响添加。也可以不验证直接添加。添加后只会进入“自定义优选地址”，点击原页面“保存”后才正式生效。</p>
 		<div id="proxyIpNodeStatus"></div>
 		<div class="api-buttons chain-proxy-buttons">
 			<button type="button" class="btn btn-verify-api" id="btnVerifyProxyIp" onclick="verifyProxyIpAvailability()" disabled>可用性验证</button>
@@ -162,21 +162,23 @@ async function 注入ProxyIP后台入口(response) {
 	}
 	function updateProxyIpVerifyButton(){
 		const verifyBtn = document.getElementById('btnVerifyProxyIp');
-		if (!verifyBtn) return;
+		const addBtn = document.getElementById('btnAddProxyIp');
 		let valid = false;
-		try { valid = !!getProxyIpValidationKey(); } catch (_) { valid = false; }
-		verifyBtn.disabled = proxyIpChecking || !valid;
+		try {
+			valid = !!getProxyIpValidationKey();
+			const name = String(document.getElementById('proxyIpNodeName')?.value || '').trim();
+			valid = valid && !!name;
+		} catch (_) { valid = false; }
+		if (verifyBtn) verifyBtn.disabled = proxyIpChecking || !valid;
+		if (addBtn) addBtn.disabled = !valid;
 	}
 	function resetProxyIpValidation(){
 		proxyIpValidatedKey = '';
-		const addBtn = document.getElementById('btnAddProxyIp');
-		if (addBtn) addBtn.disabled = true;
 		if (!proxyIpChecking) setProxyIpStatus('', '');
 		updateProxyIpVerifyButton();
 	}
 	window.verifyProxyIpAvailability = async function(){
 		const verifyBtn = document.getElementById('btnVerifyProxyIp');
-		const addBtn = document.getElementById('btnAddProxyIp');
 		let key = '';
 		try {
 			key = getProxyIpValidationKey();
@@ -189,7 +191,6 @@ async function 注入ProxyIP后台入口(response) {
 			proxyIpChecking = true;
 			proxyIpValidatedKey = '';
 			if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = '验证中...'; }
-			if (addBtn) addBtn.disabled = true;
 			setProxyIpStatus('checking', '正在使用原版 ProxyIP 可用性检测服务验证...');
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), 10000);
@@ -199,12 +200,14 @@ async function 注入ProxyIP后台入口(response) {
 			} finally {
 				clearTimeout(timer);
 			}
+			const responseText = await response.text();
 			let data = {};
-			try { data = await response.json(); } catch (_) {}
-			if (!response.ok || !data.success) throw new Error(data.msg || data.error || ('HTTP ' + response.status));
+			try { data = JSON.parse(responseText); }
+			catch (_) { throw new Error('检测服务返回非 JSON 数据（HTTP ' + response.status + '）'); }
+			if (!response.ok) throw new Error(data.msg || data.error || ('检测服务请求失败：HTTP ' + response.status));
+			if (!data.success) throw new Error(data.msg || data.error || '检测服务判定该 ProxyIP 不可用');
 			if (key !== getProxyIpValidationKey()) throw new Error('参数已变化，请重新验证');
 			proxyIpValidatedKey = key;
-			if (addBtn) addBtn.disabled = false;
 			let detail = '验证通过';
 			if (Number.isFinite(Number(data.responseTime))) detail += ' · ' + Number(data.responseTime) + 'ms';
 			if (data.supports_ipv4 === true) detail += ' · IPv4';
@@ -212,7 +215,6 @@ async function 注入ProxyIP后台入口(response) {
 			setProxyIpStatus('success', detail);
 		} catch (error) {
 			proxyIpValidatedKey = '';
-			if (addBtn) addBtn.disabled = true;
 			const message = error?.name === 'AbortError' ? '原版 ProxyIP 检测服务超时' : (error?.message || String(error));
 			setProxyIpStatus('error', '验证失败：' + message);
 		} finally {
@@ -314,8 +316,6 @@ async function 注入ProxyIP后台入口(response) {
 			const port = Number(String(document.getElementById('proxyIpPreferredPort')?.value || '443').trim());
 			if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('优选端口必须为 1~65535');
 			const proxyip = normalizeProxy(document.getElementById('proxyIpAddress')?.value);
-			const validationKey = host + ':' + port + '|' + proxyip;
-			if (!proxyIpValidatedKey || proxyIpValidatedKey !== validationKey) throw new Error('请先完成并通过可用性验证');
 			const line = host + ':' + port + '#' + name;
 			const textarea = document.getElementById('customIPs');
 			if (!textarea) throw new Error('未找到自定义优选地址输入框');
@@ -339,6 +339,7 @@ async function 注入ProxyIP后台入口(response) {
 	if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
 	document.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
 	['proxyIpPreferredHost','proxyIpPreferredPort','proxyIpAddress'].forEach(function(id){ document.getElementById(id)?.addEventListener('input', resetProxyIpValidation); });
+	document.getElementById('proxyIpNodeName')?.addEventListener('input', updateProxyIpVerifyButton);
 	window.addEventListener('resize', syncButton);
 	loadPersisted();
 	syncButton();
