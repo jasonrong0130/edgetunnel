@@ -1,3 +1,4 @@
+import { connect as 官方TCP连接 } from 'cloudflare:sockets';
 const Version = '2026-08-11 14:45:22';
 let config_JSON, 缓存SOCKS5白名单 = null, 调试日志打印 = false;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
@@ -64,15 +65,20 @@ async function 检测ProxyIP可用性(request, proxyValue) {
 	const hostname = stripIPv6Brackets(parsed.hostname);
 	const port = Number(parsed.port || 443);
 	const startTime = Date.now();
-	const TCP连接 = 创建请求TCP连接器(request);
+	// 后台验证使用 Cloudflare 官方 sockets API；不复用 request.fetcher.connect 的请求级灰接口。
+	const TCP连接 = (options, init) => init === undefined ? 官方TCP连接(options) : 官方TCP连接(options, init);
 	let tcpSocket = null, tlsSocket = null;
 	const withTimeout = (promise, ms, message) => Promise.race([
 		promise,
 		new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
 	]);
 	try {
-		tcpSocket = TCP连接({ hostname, port });
-		if (tcpSocket.opened) await withTimeout(tcpSocket.opened, 5000, 'ProxyIP TCP连接超时');
+		try {
+			tcpSocket = TCP连接({ hostname, port });
+			if (tcpSocket.opened) await withTimeout(tcpSocket.opened, 5000, 'ProxyIP TCP连接超时');
+		} catch (err) {
+			throw new Error('ProxyIP TCP阶段失败：' + (err?.message || err));
+		}
 		tlsSocket = new TlsClient(tcpSocket, { serverName: 'ifconfig.me', insecure: true });
 		await withTimeout(tlsSocket.handshake(), 6000, 'ProxyIP TLS握手超时');
 		const encoder = new TextEncoder(), decoder = new TextDecoder();
