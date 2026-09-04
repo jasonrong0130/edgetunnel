@@ -1,0 +1,57 @@
+name: Uppercase ProxyIP button
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/uppercase-proxyip-button.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Update button label
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('_worker.js')
+          s = p.read_text(encoding='utf-8-sig')
+          old1 = 'onclick="openProxyIpModal()">ProxyIP</button>'
+          old2 = "btn.textContent = 'ProxyIP';"
+          if old1 not in s:
+              raise SystemExit('static button label anchor not found')
+          if old2 not in s:
+              raise SystemExit('dynamic button label anchor not found')
+          s = s.replace(old1, 'onclick="openProxyIpModal()">PROXYIP</button>', 1)
+          s = s.replace(old2, "btn.textContent = 'PROXYIP';", 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validate
+        shell: bash
+        run: |
+          node --check _worker.js
+          git diff --check
+          grep -Fq '>PROXYIP</button>' _worker.js
+          grep -Fq "btn.textContent = 'PROXYIP';" _worker.js
+          npx --yes wrangler@4.129.0 deploy --dry-run --outdir=/tmp/wrangler-dry
+
+      - name: Commit and clean helper
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+          git rm .github/workflows/uppercase-proxyip-button.yml
+          git commit -m 'fix: uppercase PROXYIP button label'
+          git push origin HEAD:feature/force-proxyip
