@@ -1,0 +1,78 @@
+name: Fix ProxyIP admin entry
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/fix-proxyip-entry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch admin entry injection
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('_worker.js')
+          text = p.read_text(encoding='utf-8-sig')
+          start_marker = 'async function 注入ProxyIP后台入口(response) {'
+          end_marker = '\n///////////////////////////////////////////////////////查杀特征码'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          new_func = r'''async function 注入ProxyIP后台入口(response) {
+	try {
+		const html = await response.text();
+		if (html.includes('id="proxyIpNodeBtn"')) {
+			const headers = new Headers(response.headers);
+			headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
+			return new Response(html, { status: response.status, statusText: response.statusText, headers });
+		}
+		const proxyButton = '<button type="button" class="btn btn-chain-proxy" id="proxyIpNodeBtn" onclick="location.href=\'/admin/proxyip\'">ProxyIP节点</button>';
+		const chainButtonPattern = /(<button\s+type="button"\s+class="btn btn-chain-proxy hidden-section"\s+id="chainProxyBtn"[\s\S]*?<\/button>)/i;
+		let body;
+		if (chainButtonPattern.test(html)) {
+			body = html.replace(chainButtonPattern, '$1\n\t\t\t\t\t\t' + proxyButton);
+		} else {
+			const fallback = '<a id="proxyIpNodeBtn" href="/admin/proxyip" style="position:fixed;right:22px;bottom:22px;z-index:99999;padding:11px 16px;border-radius:12px;background:#f6821f;color:#fff;text-decoration:none;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.18)">ProxyIP节点</a>';
+			body = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, fallback + '</body>') : html + fallback;
+		}
+		const headers = new Headers(response.headers);
+		headers.delete('content-length'); headers.delete('content-encoding'); headers.set('Cache-Control', 'no-store');
+		return new Response(body, { status: response.status, statusText: response.statusText, headers });
+	} catch (error) {
+		log(`[ProxyIP节点] 后台入口注入失败: ${error?.message || error}`);
+		return response;
+	}
+}
+'''
+          text = text[:start] + new_func + text[end:]
+          p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate
+        run: |
+          node --check _worker.js
+          git diff --check
+          grep -q 'id="proxyIpNodeBtn"' _worker.js
+          grep -q 'admin/proxyip' _worker.js
+
+      - name: Commit and clean helper
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _worker.js
+          git rm -f .github/workflows/fix-proxyip-entry.yml
+          git commit -m "fix: render ProxyIP admin entry server-side"
+          git push origin HEAD:feature/force-proxyip
