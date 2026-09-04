@@ -2,10 +2,8 @@ name: Fix ProxyIP button final
 
 on:
   push:
-    branches:
-      - feature/force-proxyip
-    paths:
-      - .github/workflows/fix-proxyip-button-final.yml
+    branches: [feature/force-proxyip]
+    paths: [.github/workflows/fix-proxyip-button-final.yml]
 
 permissions:
   contents: write
@@ -18,72 +16,17 @@ jobs:
         with:
           ref: feature/force-proxyip
           fetch-depth: 0
-
-      - name: Apply final button polish
-        shell: bash
+      - name: Patch
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('_worker.js')
-          s = p.read_text(encoding='utf-8-sig')
-
-          s = s.replace('id=\"proxyIpNodeBtn\" onclick=\"openProxyIpModal()\">ProxyIP节点</button>', 'id=\"proxyIpNodeBtn\" onclick=\"openProxyIpModal()\">ProxyIP</button>')
-          s = s.replace("btn.textContent = 'ProxyIP节点';", "btn.textContent = 'ProxyIP';")
-
-          old = """\tfunction syncButton(){
-\t\tconst source = document.getElementById('chainProxyBtn');
-\t\tconst btn = ensureButton();
-\t\tif (!source || !btn) return;
-\t\tbtn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));
-\t\tbtn.style.display = source.style.display || '';
-\t\trequestAnimationFrame(function(){
-\t\t\tconst rect = source.getBoundingClientRect();
-\t\t\tif (rect.width > 0) btn.style.setProperty('width', rect.width + 'px', 'important');
-\t\t\tif (rect.height > 0) btn.style.setProperty('height', rect.height + 'px', 'important');
-\t\t});
-\t}
-"""
-          new = """\tfunction syncButton(){
-\t\tconst source = document.getElementById('chainProxyBtn');
-\t\tconst btn = ensureButton();
-\t\tif (!source || !btn) return;
-\t\tbtn.classList.toggle('hidden-section', source.classList.contains('hidden-section'));
-\t\tbtn.style.display = source.style.display || '';
-\t}
-"""
-          if old in s:
-              s = s.replace(old, new, 1)
-
-          old_obs = """\tif (chainBtn) {
-\t\tnew MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
-\t\tif (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncButton).observe(chainBtn);
-\t}
-"""
-          new_obs = """\tif (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
-"""
-          if old_obs in s:
-              s = s.replace(old_obs, new_obs, 1)
-
-          p.write_text(s, encoding='utf-8')
-          PY
-
-      - name: Validate
-        shell: bash
-        run: |
+          python3 -c "p='_worker.js';s=open(p,encoding='utf-8-sig').read();s=s.replace('>ProxyIP节点</button>','>ProxyIP</button>').replace(\"btn.textContent = 'ProxyIP节点';\",\"btn.textContent = 'ProxyIP';\");open(p,'w',encoding='utf-8').write(s)"
           node --check _worker.js
-          git diff --check
-          grep -Fq 'id="proxyIpNodeBtn" onclick="openProxyIpModal()">ProxyIP</button>' _worker.js
+          grep -Fq '>ProxyIP</button>' _worker.js
           grep -Fq "btn.textContent = 'ProxyIP';" _worker.js
-          if grep -Fq "btn.style.setProperty('width'" _worker.js; then exit 1; fi
-          if grep -Fq "btn.style.setProperty('height'" _worker.js; then exit 1; fi
-
-      - name: Commit and clean helper
-        shell: bash
+      - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add _worker.js
           git rm -f .github/workflows/fix-proxyip-button-final.yml
-          git commit -m "fix: match original action sizing and shorten ProxyIP label"
+          git commit -m "fix: shorten ProxyIP button label"
           git push origin HEAD:feature/force-proxyip
