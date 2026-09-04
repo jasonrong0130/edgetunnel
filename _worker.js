@@ -172,17 +172,20 @@ async function 注入ProxyIP后台入口(response) {
 		return v;
 	}
 	window.openProxyIpChecker = function(){
-		try {
-			const proxyip = normalizeProxy(document.getElementById('proxyIpAddress')?.value);
-			const checkerUrl = '/admin/proxyip-checker/' + encodeURIComponent(proxyip);
-			const tab = window.open('about:blank', '_blank');
-			if (!tab) throw new Error('浏览器阻止了新选项卡，请允许本站打开新选项卡');
-			try { tab.opener = null; } catch (_) {}
-			tab.location.href = checkerUrl;
-		} catch (error) {
-			if (typeof showToast === 'function') showToast(error.message || String(error), 'error');
-			else alert(error.message || String(error));
+		const tab = window.open('about:blank', '_blank');
+		if (!tab) {
+			const message = '浏览器阻止了新选项卡，请允许本站打开新选项卡';
+			if (typeof showToast === 'function') showToast(message, 'error');
+			else alert(message);
+			return;
 		}
+		try { tab.opener = null; } catch (_) {}
+		let proxyip = String(document.getElementById('proxyIpAddress')?.value || '').trim();
+		proxyip = proxyip.replace(/^proxyip:\/\//i, '').trim();
+		const checkerUrl = proxyip
+			? '/admin/proxyip-checker/' + encodeURIComponent(proxyip)
+			: '/admin/proxyip-checker';
+		tab.location.href = checkerUrl;
 	};
 	function ensureButton(){
 		const source = document.getElementById('chainProxyBtn');
