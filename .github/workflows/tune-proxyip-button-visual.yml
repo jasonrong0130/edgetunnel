@@ -1,0 +1,47 @@
+name: Tune ProxyIP button visual
+
+on:
+  push:
+    branches: [feature/force-proxyip]
+    paths: [.github/workflows/tune-proxyip-button-visual.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch ProxyIP action appearance
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('_worker.js')
+          s = p.read_text(encoding='utf-8-sig')
+          old = '#proxyIpNodeBtn.proxyip-node-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important;box-shadow:0 4px 15px rgba(220,38,38,.34)!important}'
+          new = '#proxyIpNodeBtn.proxyip-node-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important;box-shadow:0 4px 15px rgba(220,38,38,.40)!important;padding:10px 20px!important;font-size:17px!important;font-weight:600!important;line-height:19px!important;letter-spacing:.5px!important;border-radius:12px!important;box-sizing:border-box!important}'
+          if old not in s:
+              raise SystemExit('ProxyIP button style anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+          node --check _worker.js
+          git diff --check
+          grep -Fq 'font-size:17px!important' _worker.js
+          grep -Fq 'box-shadow:0 4px 15px rgba(220,38,38,.40)!important' _worker.js
+
+      - name: Commit and clean helper
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _worker.js
+          git rm -f .github/workflows/tune-proxyip-button-visual.yml
+          git commit -m "fix: visually align ProxyIP action button"
+          git push origin HEAD:feature/force-proxyip
