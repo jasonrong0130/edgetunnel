@@ -1,0 +1,55 @@
+name: Open ProxyIP checker without pre-validation
+
+on:
+  push:
+    branches:
+      - feature/force-proxyip
+    paths:
+      - .github/workflows/open-checker-without-validation.yml
+      - .github/scripts/open_checker_without_validation.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/force-proxyip
+          fetch-depth: 0
+
+      - name: Patch checker button
+        run: python3 .github/scripts/open_checker_without_validation.py
+
+      - name: Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check _worker.js
+          git diff --check
+          grep -Fq "const tab = window.open('about:blank', '_blank');" _worker.js
+          grep -Fq "? '/admin/proxyip-checker/' + encodeURIComponent(proxyip)" _worker.js
+          grep -Fq ": '/admin/proxyip-checker';" _worker.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('_worker.js').read_text(encoding='utf-8')
+          start = s.index("\twindow.openProxyIpChecker = function(){")
+          end = s.index("\n\tfunction ensureButton(){", start)
+          block = s[start:end]
+          if 'normalizeProxy(' in block:
+              raise SystemExit('checker button still calls normalizeProxy')
+          PY
+
+      - name: Commit and clean helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+          git commit -m 'fix: always open ProxyIP checker in new tab'
+          git rm .github/workflows/open-checker-without-validation.yml .github/scripts/open_checker_without_validation.py
+          git commit -m 'chore: remove temporary checker button patch helpers'
+          git push origin feature/force-proxyip
