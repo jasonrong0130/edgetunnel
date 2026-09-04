@@ -24,78 +24,33 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
-
           p = Path('_worker.js')
           s = p.read_text(encoding='utf-8-sig')
-          pattern = re.compile(r"async function 检测ProxyIP可用性\(request, proxyValue\) \{[\s\S]*?\n\}\n\nasync function 注入ProxyIP后台入口", re.M)
-          new = r'''async function 检测ProxyIP可用性(request, proxyValue) {
-	const endpoint = 规范化ProxyIP端点(proxyValue);
-	const parsed = new URL('https://' + endpoint);
-	const hostname = stripIPv6Brackets(parsed.hostname);
-	const port = Number(parsed.port || 443);
-	const startTime = Date.now();
-	const 检测主机 = 'ifconfig.me';
-	const TCP连接 = 创建请求TCP连接器(request);
-	let tcpSocket = null, tlsSocket = null;
-	const withTimeout = (promise, ms, message) => Promise.race([
-		promise,
-		new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
-	]);
-	try {
-		tcpSocket = TCP连接({ hostname, port });
-		if (tcpSocket.opened) await withTimeout(tcpSocket.opened, 5000, 'ProxyIP TCP连接超时');
-		tlsSocket = new TlsClient(tcpSocket, { serverName: 检测主机, insecure: true });
-		await withTimeout(tlsSocket.handshake(), 6000, 'ProxyIP TLS握手超时');
-		const encoder = new TextEncoder(), decoder = new TextDecoder();
-		await withTimeout(tlsSocket.write(encoder.encode(`GET /ip HTTP/1.1\r\nHost: ${检测主机}\r\nUser-Agent: Mozilla/5.0\r\nAccept: text/plain\r\nConnection: close\r\n\r\n`)), 5000, 'ProxyIP检测请求写入超时');
-		let responseBuffer = new Uint8Array(0);
-		const deadline = Date.now() + 8000, maxBytes = 32 * 1024;
-		while (Date.now() < deadline && responseBuffer.length < maxBytes) {
-			const remain = Math.max(1, deadline - Date.now());
-			const value = await withTimeout(tlsSocket.read(), remain, 'ProxyIP检测响应超时');
-			if (!value) break;
-			if (value.byteLength === 0) continue;
-			const merged = new Uint8Array(responseBuffer.length + value.byteLength);
-			merged.set(responseBuffer, 0);
-			merged.set(value, responseBuffer.length);
-			responseBuffer = merged;
-		}
-		if (!responseBuffer.length) throw new Error('ProxyIP未返回检测数据');
-		const responseText = decoder.decode(responseBuffer);
-		const headerEnd = responseText.indexOf('\r\n\r\n');
-		if (headerEnd < 0) throw new Error('ProxyIP检测响应无效');
-		const headerText = responseText.slice(0, headerEnd);
-		const bodyText = responseText.slice(headerEnd + 4).trim();
-		const statusLine = headerText.split('\r\n')[0] || '';
-		const statusMatch = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
-		const statusCode = statusMatch ? Number(statusMatch[1]) : NaN;
-		if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode >= 300) throw new Error('ProxyIP检测请求失败: ' + (statusLine || '无效响应'));
-		const ipv4 = bodyText.match(/(?:\d{1,3}\.){3}\d{1,3}/)?.[0] || '';
-		const ipv6 = bodyText.match(/[0-9a-fA-F]{0,4}:[0-9a-fA-F:]+/)?.[0] || '';
-		const ip = ipv4 || ipv6;
-		if (!ip) throw new Error('ProxyIP检测响应中未找到出口IP');
-		return { success: true, proxyip: endpoint, ip, loc: '', colo: '', latency: Date.now() - startTime, target: 检测主机 };
-	} finally {
-		try { tlsSocket?.close?.(); } catch (_) {}
-		try { tcpSocket?.close?.(); } catch (_) {}
-	}
-}
-
-async function 注入ProxyIP后台入口'''
-          s2, n = pattern.subn(new, s, count=1)
-          if n != 1:
-              raise SystemExit(f'verifier function anchor mismatch: {n}')
-          p.write_text(s2, encoding='utf-8')
+          old1 = "tlsSocket = new TlsClient(tcpSocket, { serverName: 'cloudflare.com', insecure: true });"
+          new1 = "tlsSocket = new TlsClient(tcpSocket, { serverName: 'ifconfig.me', insecure: true });"
+          if old1 not in s:
+              raise SystemExit('ProxyIP TLS target anchor not found')
+          s = s.replace(old1, new1, 1)
+          old2 = "await withTimeout(tlsSocket.write(encoder.encode('GET /cdn-cgi/trace HTTP/1.1\\r\\nHost: cloudflare.com\\r\\nUser-Agent: Mozilla/5.0\\r\\nConnection: close\\r\\n\\r\\n')), 5000, 'ProxyIP检测请求写入超时');"
+          new2 = "await withTimeout(tlsSocket.write(encoder.encode('GET /ip HTTP/1.1\\r\\nHost: ifconfig.me\\r\\nUser-Agent: Mozilla/5.0\\r\\nAccept: text/plain\\r\\nConnection: close\\r\\n\\r\\n')), 5000, 'ProxyIP检测请求写入超时');"
+          if old2 not in s:
+              raise SystemExit('ProxyIP request target anchor not found')
+          s = s.replace(old2, new2, 1)
+          old3 = "const ip = responseText.match(/(?:^|\\n)ip=([^\\r\\n]+)/m)?.[1]?.trim();\n\t\tconst loc = responseText.match(/(?:^|\\n)loc=([^\\r\\n]+)/m)?.[1]?.trim() || '';\n\t\tconst colo = responseText.match(/(?:^|\\n)colo=([^\\r\\n]+)/m)?.[1]?.trim() || '';"
+          new3 = "const bodyText = responseText.slice(responseText.indexOf('\\r\\n\\r\\n') + 4).trim();\n\t\tconst ip = bodyText.match(/(?:\\d{1,3}\\.){3}\\d{1,3}/)?.[0] || bodyText.match(/[0-9a-fA-F]{0,4}:[0-9a-fA-F:]+/)?.[0] || '';\n\t\tconst loc = '';\n\t\tconst colo = '';"
+          if old3 not in s:
+              raise SystemExit('ProxyIP response parse anchor not found')
+          s = s.replace(old3, new3, 1)
+          p.write_text(s, encoding='utf-8')
           PY
 
       - name: Validate
         run: |
           node --check _worker.js
           git diff --check
-          grep -Fq "const 检测主机 = 'ifconfig.me';" _worker.js
+          grep -Fq "serverName: 'ifconfig.me'" _worker.js
           grep -Fq 'GET /ip HTTP/1.1' _worker.js
-          if grep -Fq "serverName: 'cloudflare.com'" _worker.js | head -n 1; then true; fi
+          grep -Fq '>PROXYIP</button>' _worker.js
           npx --yes wrangler@4.129.0 deploy --dry-run --outdir=/tmp/wrangler-dry
 
       - name: Commit and clean helper
