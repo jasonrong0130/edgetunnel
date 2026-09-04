@@ -526,8 +526,7 @@ export default {
 						} else if (区分大小写访问路径 === 'admin/ADD.txt') { // 保存自定义优选IP
 							try {
 								const customIPs = await request.text();
-								const 当前行集合 = new Set(customIPs.split(/?
-/).map(v => v.trim()).filter(Boolean));
+								const 当前行集合 = new Set(customIPs.split(/\r?\n/).map(v => v.trim()).filter(Boolean));
 								let 新节点映射 = null;
 								const 隐藏映射头 = request.headers.get('x-proxyip-nodes');
 								if (隐藏映射头 !== null) {
