@@ -1,4 +1,4 @@
-# Production candidate: ProxyIP admin entry + external scanner + KV
+# Production candidate: ProxyIP admin entry + external scanner + KV + restricted Probe UUID
 name = "vpnrong"
 main = "_worker.js"
 compatibility_date = "2025-11-04"
