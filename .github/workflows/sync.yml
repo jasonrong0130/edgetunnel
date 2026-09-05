@@ -1,11 +1,9 @@
-name: Upstream Sync
+name: Manual Upstream Sync
 
 permissions:
   contents: write
 
 on:
-  schedule:
-    - cron: "0 0 * * *" # every day
   workflow_dispatch:
 
 jobs:
@@ -30,14 +28,12 @@ jobs:
           git fetch upstream main
 
           if git diff --quiet HEAD upstream/main; then
-            # 内容和上游一致，直接对齐，顺带清理历史分叉留下的多余 merge commit
             git reset --hard upstream/main
             git push --force-with-lease origin main
           else
-            # 有本地修改，保持原来的合并方式，不覆盖任何人的改动
             if ! git pull --no-rebase upstream main; then
-              echo "[Error] 合并上游变更产生冲突，自动同步已暂停，请手动 Sync Fork 并解决冲突。"
-              echo "[Error] Merge conflict detected while syncing upstream. Please sync your fork manually and resolve the conflicts."
+              echo "[Error] 合并上游变更产生冲突，手动同步已暂停，请人工解决冲突。"
+              echo "[Error] Merge conflict detected during manual upstream sync. Please resolve it manually."
               exit 1
             fi
             git push origin main
