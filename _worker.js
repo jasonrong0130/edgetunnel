@@ -715,11 +715,24 @@ export default {
 								const 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
 								const 当前行集合 = new Set(当前行列表);
 								const 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
+								const 旧CustomIPs = await env.KV.get('ADD.txt') || '';
+								const 旧行列表 = 旧CustomIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+								const 旧行集合 = new Set(旧行列表);
 								const 新节点映射 = {};
 								// 先保留仍存在于文本框中的旧绑定。这样前端异步加载、重排、剪切/粘贴都不会误删 ProxyIP。
 								for (const [line, proxyip] of Object.entries(旧节点映射)) {
 									const key = 规范化自定义优选行(line);
 									if (key && 当前行集合.has(key)) 新节点映射[key] = 规范化ProxyIP端点(proxyip);
+								}
+								// 同位置文本替换视为同一逻辑节点；纯重排不会触发迁移。
+								if (旧行列表.length === 当前行列表.length) {
+									for (let i = 0; i < 旧行列表.length; i++) {
+										const 旧行 = 旧行列表[i], 新行 = 当前行列表[i];
+										if (!旧行 || !新行 || 旧行 === 新行) continue;
+										// 旧行仍存在或新行原本就存在，说明更像是移动/重排，不做猜测。
+										if (当前行集合.has(旧行) || 旧行集合.has(新行)) continue;
+										if (旧节点映射[旧行] && !新节点映射[新行]) 新节点映射[新行] = 规范化ProxyIP端点(旧节点映射[旧行]);
+									}
 								}
 								const 隐藏映射头 = request.headers.get('x-proxyip-nodes');
 								if (隐藏映射头 !== null) {
