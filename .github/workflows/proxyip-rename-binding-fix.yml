@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Preserve ProxyIP binding across direct row edits
+      - name: Preserve ProxyIP binding across row rename
         shell: bash
         run: |
           python3 <<'PY'
@@ -26,99 +26,46 @@ jobs:
           s = path.read_text(encoding='utf-8')
           original = s
 
-          # Frontend: treat direct editing of one visible row as the same logical node.
-          fetch_anchor = r'''\twindow.fetch = async function(input, init){'''
-          frontend = r'''\tlet lastCustomLines = [];
-\tfunction bindCustomLineRenameTracking(){
-\t\tconst textarea = document.getElementById('customIPs');
-\t\tif (!textarea || textarea.dataset.proxyipRenameTracking === '1') return;
-\t\ttextarea.dataset.proxyipRenameTracking = '1';
-\t\tlastCustomLines = cleanLines(textarea.value);
-\t\ttextarea.addEventListener('focus', function(){ lastCustomLines = cleanLines(textarea.value); });
-\t\ttextarea.addEventListener('beforeinput', function(){ lastCustomLines = cleanLines(textarea.value); });
-\t\ttextarea.addEventListener('input', async function(){
-\t\t\tconst previous = lastCustomLines;
-\t\t\tconst current = cleanLines(textarea.value);
-\t\t\tlastCustomLines = current;
-\t\t\tconst previousSet = new Set(previous);
-\t\t\tconst currentSet = new Set(current);
-\t\t\tconst removed = previous.filter(line => !currentSet.has(line));
-\t\t\tconst added = current.filter(line => !previousSet.has(line));
-\t\t\tif (removed.length !== 1 || added.length !== 1) return;
-\t\t\tawait persistedReady;
-\t\t\tconst oldLine = removed[0], newLine = added[0];
-\t\t\tconst proxyip = pending[oldLine] || persisted[oldLine] || '';
-\t\t\tif (!proxyip) return;
-\t\t\tpending[newLine] = proxyip;
-\t\t\tdelete pending[oldLine];
-\t\t});
-\t}
+          old_anchor = "\t\t\t\t\t\t\t\tconst 旧节点映射 = await 读取自定义ProxyIP节点映射(env);\n\t\t\t\t\t\t\t\tconst 新节点映射 = {};"
+          new_anchor = (
+              "\t\t\t\t\t\t\t\tconst 旧节点映射 = await 读取自定义ProxyIP节点映射(env);\n"
+              "\t\t\t\t\t\t\t\tconst 旧CustomIPs = await env.KV.get('ADD.txt') || '';\n"
+              "\t\t\t\t\t\t\t\tconst 旧行列表 = 旧CustomIPs.split(/\\r?\\n/).map(规范化自定义优选行).filter(Boolean);\n"
+              "\t\t\t\t\t\t\t\tconst 旧行集合 = new Set(旧行列表);\n"
+              "\t\t\t\t\t\t\t\tconst 新节点映射 = {};"
+          )
+          if "const 旧CustomIPs = await env.KV.get('ADD.txt') || '';" not in s:
+              if old_anchor not in s:
+                  raise SystemExit('old ADD.txt mapping anchor not found')
+              s = s.replace(old_anchor, new_anchor, 1)
 
-'''
-          if 'function bindCustomLineRenameTracking()' not in s:
-              if fetch_anchor not in s:
-                  raise SystemExit('frontend fetch anchor not found')
-              s = s.replace(fetch_anchor, frontend + fetch_anchor, 1)
-
-          ready_old = r'''\tpersistedReady = loadPersisted();
-\tsyncButton();'''
-          ready_new = r'''\tpersistedReady = loadPersisted();
-\tbindCustomLineRenameTracking();
-\tsyncButton();'''
-          if ready_old in s:
-              s = s.replace(ready_old, ready_new, 1)
-          elif ready_new not in s:
-              raise SystemExit('frontend init anchor not found')
-
-          # Backend safety net: if exactly one row changed in-place, migrate the old binding.
-          backend_old = r'''\t\t\t\t\t\t\t\tconst 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
-\t\t\t\t\t\t\t\tconst 当前行集合 = new Set(当前行列表);
-\t\t\t\t\t\t\t\tconst 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
-\t\t\t\t\t\t\t\tconst 新节点映射 = {};'''
-          backend_new = r'''\t\t\t\t\t\t\t\tconst 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
-\t\t\t\t\t\t\t\tconst 当前行集合 = new Set(当前行列表);
-\t\t\t\t\t\t\t\tconst 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
-\t\t\t\t\t\t\t\tconst 旧CustomIPs = await env.KV.get('ADD.txt') || '';
-\t\t\t\t\t\t\t\tconst 旧行列表 = 旧CustomIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
-\t\t\t\t\t\t\t\tconst 新节点映射 = {};'''
-          if backend_old in s:
-              s = s.replace(backend_old, backend_new, 1)
-          elif "const 旧CustomIPs = await env.KV.get('ADD.txt') || '';" not in s:
-              raise SystemExit('backend old-list anchor not found')
-
-          preserve_anchor = r'''\t\t\t\t\t\t\t\tconst 隐藏映射头 = request.headers.get('x-proxyip-nodes');'''
-          migration = r'''\t\t\t\t\t\t\t\t// 单行原地编辑（例如只修改 # 后面的节点名称）视为同一逻辑节点，ProxyIP 跟随迁移。
-\t\t\t\t\t\t\t\tconst 旧行集合 = new Set(旧行列表);
-\t\t\t\t\t\t\t\tconst 已删除旧绑定行 = 旧行列表.filter(line => !当前行集合.has(line) && 旧节点映射[line]);
-\t\t\t\t\t\t\t\tconst 新增当前行 = 当前行列表.filter(line => !旧行集合.has(line));
-\t\t\t\t\t\t\t\tif (旧行列表.length === 当前行列表.length && 已删除旧绑定行.length === 1 && 新增当前行.length === 1) {
-\t\t\t\t\t\t\t\t\tlet 差异位置数 = 0, 旧差异行 = '', 新差异行 = '';
-\t\t\t\t\t\t\t\t\tfor (let i = 0; i < 旧行列表.length; i++) {
-\t\t\t\t\t\t\t\t\t\tif (旧行列表[i] === 当前行列表[i]) continue;
-\t\t\t\t\t\t\t\t\t\t差异位置数++;
-\t\t\t\t\t\t\t\t\t\t旧差异行 = 旧行列表[i];
-\t\t\t\t\t\t\t\t\t\t新差异行 = 当前行列表[i];
-\t\t\t\t\t\t\t\t\t\tif (差异位置数 > 1) break;
-\t\t\t\t\t\t\t\t\t}
-\t\t\t\t\t\t\t\t\tif (差异位置数 === 1 && 旧差异行 === 已删除旧绑定行[0] && 新差异行 === 新增当前行[0]) {
-\t\t\t\t\t\t\t\t\t\t新节点映射[新差异行] = 规范化ProxyIP端点(旧节点映射[旧差异行]);
-\t\t\t\t\t\t\t\t\t}
-\t\t\t\t\t\t\t\t}
-'''
-          if 'const 已删除旧绑定行 = 旧行列表.filter' not in s:
-              if preserve_anchor not in s:
-                  raise SystemExit('backend migration anchor not found')
-              s = s.replace(preserve_anchor, migration + preserve_anchor, 1)
+          header_anchor = "\t\t\t\t\t\t\t\tconst 隐藏映射头 = request.headers.get('x-proxyip-nodes');"
+          migration = (
+              "\t\t\t\t\t\t\t\t// 同位置文本替换视为同一逻辑节点；纯重排不会触发迁移。\n"
+              "\t\t\t\t\t\t\t\tif (旧行列表.length === 当前行列表.length) {\n"
+              "\t\t\t\t\t\t\t\t\tfor (let i = 0; i < 旧行列表.length; i++) {\n"
+              "\t\t\t\t\t\t\t\t\t\tconst 旧行 = 旧行列表[i], 新行 = 当前行列表[i];\n"
+              "\t\t\t\t\t\t\t\t\t\tif (!旧行 || !新行 || 旧行 === 新行) continue;\n"
+              "\t\t\t\t\t\t\t\t\t\t// 旧行仍存在或新行原本就存在，说明更像是移动/重排，不做猜测。\n"
+              "\t\t\t\t\t\t\t\t\t\tif (当前行集合.has(旧行) || 旧行集合.has(新行)) continue;\n"
+              "\t\t\t\t\t\t\t\t\t\tif (旧节点映射[旧行] && !新节点映射[新行]) 新节点映射[新行] = 规范化ProxyIP端点(旧节点映射[旧行]);\n"
+              "\t\t\t\t\t\t\t\t\t}\n"
+              "\t\t\t\t\t\t\t\t}\n"
+          )
+          if '同位置文本替换视为同一逻辑节点' not in s:
+              if header_anchor not in s:
+                  raise SystemExit('hidden mapping header anchor not found')
+              s = s.replace(header_anchor, migration + header_anchor, 1)
 
           if s == original:
               raise SystemExit('no changes produced')
 
           required = [
-              'function bindCustomLineRenameTracking()',
-              'bindCustomLineRenameTracking();',
               "const 旧CustomIPs = await env.KV.get('ADD.txt') || '';",
-              'const 已删除旧绑定行 = 旧行列表.filter',
-              '新节点映射[新差异行] = 规范化ProxyIP端点(旧节点映射[旧差异行]);',
+              'const 旧行集合 = new Set(旧行列表);',
+              '同位置文本替换视为同一逻辑节点',
+              '当前行集合.has(旧行) || 旧行集合.has(新行)',
+              '新节点映射[新行] = 规范化ProxyIP端点(旧节点映射[旧行])',
           ]
           missing = [x for x in required if x not in s]
           if missing:
