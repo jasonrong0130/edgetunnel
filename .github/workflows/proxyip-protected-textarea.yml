@@ -1,0 +1,35 @@
+name: One-shot ProxyIP protected textarea migration
+
+on:
+  push:
+    paths:
+      - '.github/workflows/proxyip-protected-textarea.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply protected textarea patch
+        run: python3 scripts/patch_proxyip_protected_textarea.py
+
+      - name: Validate Worker
+        run: |
+          node --check _worker.js
+          npx --yes wrangler@4.129.0 deploy --dry-run --outdir /tmp/wrangler-dry
+          git diff --check
+
+      - name: Commit protected textarea and cleanup one-shot files
+        run: |
+          rm -f .github/workflows/proxyip-protected-textarea.yml scripts/patch_proxyip_protected_textarea.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js .github/workflows/proxyip-protected-textarea.yml scripts/patch_proxyip_protected_textarea.py
+          git commit -m 'feat: protect and highlight ProxyIP rows in custom list'
+          git push origin HEAD:main
