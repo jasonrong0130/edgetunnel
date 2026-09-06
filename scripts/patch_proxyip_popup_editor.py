@@ -4,45 +4,33 @@ path = Path('_worker.js')
 s = path.read_text(encoding='utf-8')
 original = s
 
-# 1) Persist first V2 migration immediately so generated node IDs are stable before the first edit.
-old = r'''\treturn {
-\t\tversion: 2,
-\t\tupdatedAt: 0,
-\t\tnodes: lines.map(line => ({ id: 生成自定义ProxyIP节点ID(), line, proxyip: legacy[line] || '' })),
-\t};
-}'''
-new = r'''\tconst migrated = {
-\t\tversion: 2,
-\t\tupdatedAt: Date.now(),
-\t\tnodes: lines.map(line => ({ id: 生成自定义ProxyIP节点ID(), line, proxyip: legacy[line] || '' })),
-\t};
-\ttry { await env.KV.put(自定义ProxyIP节点V2KV键, JSON.stringify(migrated, null, 2)); }
-\tcatch (error) { log(`[ProxyIP节点] 首次 V2 迁移持久化失败: ${error?.message || error}`); }
-\treturn migrated;
-}'''
-if old not in s:
-    raise SystemExit('migration return block not found')
-s = s.replace(old, new, 1)
 
-# 2) GET endpoint now exposes stable IDs to the admin popup.
-old = r'''\t\t\t\t\tif (访问路径 === 'admin/proxyip-nodes.json' && request.method === 'GET') {
-\t\t\t\t\t\tconst 节点映射 = await 读取自定义ProxyIP节点映射(env);
-\t\t\t\t\t\tconst nodes = Object.entries(节点映射).map(([line, proxyip]) => ({ line, proxyip }));
-\t\t\t\t\t\treturn new Response(JSON.stringify({ success: true, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
-\t\t\t\t\t}'''
-new = r'''\t\t\t\t\tif (访问路径 === 'admin/proxyip-nodes.json' && request.method === 'GET') {
-\t\t\t\t\t\tconst 状态 = await 读取自定义ProxyIP节点记录(env);
-\t\t\t\t\t\tconst nodes = 状态.nodes.map(item => ({ id: item.id, line: item.line, proxyip: item.proxyip || '' }));
-\t\t\t\t\t\treturn new Response(JSON.stringify({ success: true, version: 2, updatedAt: 状态.updatedAt || 0, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
-\t\t\t\t\t}'''
-if old not in s:
-    raise SystemExit('proxyip GET endpoint not found')
-s = s.replace(old, new, 1)
+def replace_once(old: str, new: str, label: str):
+    global s
+    if old not in s:
+        raise SystemExit(f'{label} not found')
+    s = s.replace(old, new, 1)
 
-# 3) Add exact-by-ID update endpoint before ordinary config POST routes.
-anchor = r'''\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 操作（POST 请求）
-\t\t\t\t\t\tif (访问路径 === 'admin/config.json') { // 保存config.json配置'''
-replacement = r'''\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 操作（POST 请求）
+
+# 1) Persist the first V2 migration immediately so node IDs stay stable before any edit.
+replace_once(
+    "\treturn {\n\t\tversion: 2,\n\t\tupdatedAt: 0,\n\t\tnodes: lines.map(line => ({ id: 生成自定义ProxyIP节点ID(), line, proxyip: legacy[line] || '' })),\n\t};\n}",
+    "\tconst migrated = {\n\t\tversion: 2,\n\t\tupdatedAt: Date.now(),\n\t\tnodes: lines.map(line => ({ id: 生成自定义ProxyIP节点ID(), line, proxyip: legacy[line] || '' })),\n\t};\n\ttry { await env.KV.put(自定义ProxyIP节点V2KV键, JSON.stringify(migrated, null, 2)); }\n\tcatch (error) { log(`[ProxyIP节点] 首次 V2 迁移持久化失败: ${error?.message || error}`); }\n\treturn migrated;\n}",
+    'migration block',
+)
+
+# 2) GET returns V2 records including stable IDs.
+replace_once(
+    "\t\t\t\t\tif (访问路径 === 'admin/proxyip-nodes.json' && request.method === 'GET') {\n\t\t\t\t\t\tconst 节点映射 = await 读取自定义ProxyIP节点映射(env);\n\t\t\t\t\t\tconst nodes = Object.entries(节点映射).map(([line, proxyip]) => ({ line, proxyip }));\n\t\t\t\t\t\treturn new Response(JSON.stringify({ success: true, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });\n\t\t\t\t\t}",
+    "\t\t\t\t\tif (访问路径 === 'admin/proxyip-nodes.json' && request.method === 'GET') {\n\t\t\t\t\t\tconst 状态 = await 读取自定义ProxyIP节点记录(env);\n\t\t\t\t\t\tconst nodes = 状态.nodes.map(item => ({ id: item.id, line: item.line, proxyip: item.proxyip || '' }));\n\t\t\t\t\t\treturn new Response(JSON.stringify({ success: true, version: 2, updatedAt: 状态.updatedAt || 0, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });\n\t\t\t\t\t}",
+    'GET proxyip nodes endpoint',
+)
+
+# 3) Add exact update-by-ID route before config POST.
+anchor = "\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 操作（POST 请求）\n\t\t\t\t\t\tif (访问路径 === 'admin/config.json') { // 保存config.json配置"
+if anchor not in s:
+    raise SystemExit('POST route anchor not found')
+update_route = """\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 操作（POST 请求）
 \t\t\t\t\t\tif (访问路径 === 'admin/proxyip-nodes/update') { // 按稳定 ID 精确编辑 ProxyIP 节点
 \t\t\t\t\t\t\ttry {
 \t\t\t\t\t\t\t\tconst input = await request.json();
@@ -56,13 +44,15 @@ replacement = r'''\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 
 \t\t\t\t\t\t\t\tif (!Number.isInteger(优选端口) || 优选端口 < 1 || 优选端口 > 65535) throw new Error('优选端口必须为 1~65535');
 \t\t\t\t\t\t\t\tconst ProxyIP = 规范化ProxyIP端点(input?.proxyip);
 \t\t\t\t\t\t\t\tconst 新行 = 规范化自定义优选行(`${优选主机}:${优选端口}#${节点名称}`);
-\n\t\t\t\t\t\t\t\tconst 状态 = await 读取自定义ProxyIP节点记录(env);
+
+\t\t\t\t\t\t\t\tconst 状态 = await 读取自定义ProxyIP节点记录(env);
 \t\t\t\t\t\t\t\tconst index = 状态.nodes.findIndex(item => String(item.id) === id);
 \t\t\t\t\t\t\t\tif (index < 0) return new Response(JSON.stringify({ error: '节点不存在或已被删除，请重新打开编辑窗口' }), { status: 404, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 \t\t\t\t\t\t\t\tif (状态.nodes.some((item, i) => i !== index && 规范化自定义优选行(item.line) === 新行)) {
 \t\t\t\t\t\t\t\t\treturn new Response(JSON.stringify({ error: '修改后会与另一条节点完全重复，请调整节点名称' }), { status: 409, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 \t\t\t\t\t\t\t\t}
-\n\t\t\t\t\t\t\t\tconst 旧行 = 规范化自定义优选行(状态.nodes[index].line);
+
+\t\t\t\t\t\t\t\tconst 旧行 = 规范化自定义优选行(状态.nodes[index].line);
 \t\t\t\t\t\t\t\t状态.nodes[index] = { ...状态.nodes[index], id, line: 新行, proxyip: ProxyIP };
 \t\t\t\t\t\t\t\tconst 当前文本 = await env.KV.get('ADD.txt') || '';
 \t\t\t\t\t\t\t\tconst 当前行列表 = 当前文本.split(/\\r?\\n/).map(规范化自定义优选行).filter(Boolean);
@@ -72,7 +62,8 @@ replacement = r'''\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 
 \t\t\t\t\t\t\t\t\treturn line;
 \t\t\t\t\t\t\t\t});
 \t\t\t\t\t\t\t\tif (!已替换) 新行列表.push(新行);
-\n\t\t\t\t\t\t\t\tconst 更新时间 = Date.now();
+
+\t\t\t\t\t\t\t\tconst 更新时间 = Date.now();
 \t\t\t\t\t\t\t\tconst V2状态 = { version: 2, updatedAt: 更新时间, nodes: 状态.nodes };
 \t\t\t\t\t\t\t\tconst 兼容旧映射 = {};
 \t\t\t\t\t\t\t\tfor (const item of 状态.nodes) if (item.proxyip) 兼容旧映射[规范化自定义优选行(item.line)] = item.proxyip;
@@ -88,62 +79,41 @@ replacement = r'''\t\t\t\t\t} else if (request.method === 'POST') {// 处理 KV 
 \t\t\t\t\t\t\t\tconsole.error('更新 ProxyIP 节点失败:', error);
 \t\t\t\t\t\t\t\treturn new Response(JSON.stringify({ error: '更新 ProxyIP 节点失败: ' + error.message }), { status: 500, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 \t\t\t\t\t\t\t}
-\t\t\t\t\t\t} else if (访问路径 === 'admin/config.json') { // 保存config.json配置'''
-if anchor not in s:
-    raise SystemExit('POST route anchor not found')
-s = s.replace(anchor, replacement, 1)
+\t\t\t\t\t\t} else if (访问路径 === 'admin/config.json') { // 保存config.json配置"""
+s = s.replace(anchor, update_route, 1)
 
-# 4) Popup HTML: existing-node selector + dynamic title/hint.
-s = s.replace(
+# 4) Popup HTML adds an existing-node selector and dynamic labels.
+replace_once(
     '<h2 class="api-optimize-modal-title">添加 ProxyIP 节点</h2>',
     '<h2 class="api-optimize-modal-title" id="proxyIpModalTitle">ProxyIP 节点</h2>',
-    1,
+    'popup title',
 )
-form_anchor = r'''\t\t<div class="api-form-group chain-proxy-form">
-\t\t\t<div class="api-form-row-item">
-\t\t\t\t<label for="proxyIpNodeName">节点名称:</label>'''
-form_replacement = r'''\t\t<div class="api-form-group chain-proxy-form">
-\t\t\t<div class="api-form-row-item">
-\t\t\t\t<label for="proxyIpExistingNode">已有节点:</label>
-\t\t\t\t<select id="proxyIpExistingNode" title="选择已有 ProxyIP 节点" onchange="selectProxyIpNode(this.value)">
-\t\t\t\t\t<option value="">＋ 新增 ProxyIP 节点</option>
-\t\t\t\t</select>
-\t\t\t</div>
-\t\t\t<div class="api-form-row-item">
-\t\t\t\t<label for="proxyIpNodeName">节点名称:</label>'''
-if form_anchor not in s:
-    raise SystemExit('popup form anchor not found')
-s = s.replace(form_anchor, form_replacement, 1)
-s = s.replace(
+replace_once(
+    "\t\t<div class=\"api-form-group chain-proxy-form\">\n\t\t\t<div class=\"api-form-row-item\">\n\t\t\t\t<label for=\"proxyIpNodeName\">节点名称:</label>",
+    "\t\t<div class=\"api-form-group chain-proxy-form\">\n\t\t\t<div class=\"api-form-row-item\">\n\t\t\t\t<label for=\"proxyIpExistingNode\">已有节点:</label>\n\t\t\t\t<select id=\"proxyIpExistingNode\" title=\"选择已有 ProxyIP 节点\" onchange=\"selectProxyIpNode(this.value)\">\n\t\t\t\t\t<option value=\"\">＋ 新增 ProxyIP 节点</option>\n\t\t\t\t</select>\n\t\t\t</div>\n\t\t\t<div class=\"api-form-row-item\">\n\t\t\t\t<label for=\"proxyIpNodeName\">节点名称:</label>",
+    'popup selector insertion',
+)
+replace_once(
     '<p class="proxyip-save-hint">填写节点信息后可直接添加。点击“可用性验证”会在新选项卡调用独立 VPS 上的 ProxyIP Scanner，并自动带入当前 ProxyIP；检测结果不影响添加。添加后点击原页面“保存”才正式生效。</p>',
     '<p class="proxyip-save-hint" id="proxyIpSaveHint">新增节点填写后点击“添加”，再点击原页面“保存”生效；编辑已有节点时点击“保存修改”会按内部节点 ID 直接保存，不需要删除重建。</p>',
-    1,
+    'popup hint',
+)
+replace_once(
+    '#proxyIpNodeModal .proxyip-address-wrap input{flex:1;min-width:0}',
+    '#proxyIpNodeModal .proxyip-address-wrap input{flex:1;min-width:0}\n#proxyIpNodeModal select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;background:var(--input-bg,#fff);color:inherit}',
+    'popup select CSS',
 )
 
-# Add select styling beside current popup styles.
-css_anchor = '#proxyIpNodeModal .proxyip-address-wrap input{flex:1;min-width:0}'
-css_replacement = css_anchor + '\n#proxyIpNodeModal select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;background:var(--input-bg,#fff);color:inherit}'
-if css_anchor not in s:
-    raise SystemExit('popup CSS anchor not found')
-s = s.replace(css_anchor, css_replacement, 1)
+# 5) Frontend keeps the V2 node list and current edit ID.
+replace_once(
+    "\tconst nativeFetch = window.fetch.bind(window);\n\tlet persistedReady = Promise.resolve();",
+    "\tconst nativeFetch = window.fetch.bind(window);\n\tlet persistedReady = Promise.resolve();\n\tlet persistedNodes = [];\n\tlet editingNodeId = '';",
+    'frontend state',
+)
 
-# 5) Frontend state tracks stable node IDs returned by the GET endpoint.
-state_anchor = r'''\tconst nativeFetch = window.fetch.bind(window);
-\tlet persistedReady = Promise.resolve();'''
-state_replacement = r'''\tconst nativeFetch = window.fetch.bind(window);
-\tlet persistedReady = Promise.resolve();
-\tlet persistedNodes = [];
-\tlet editingNodeId = '';'''
-if state_anchor not in s:
-    raise SystemExit('frontend state anchor not found')
-s = s.replace(state_anchor, state_replacement, 1)
-
-# Helpers for parsing a visible line and populating edit mode.
-helper_anchor = r'''\tfunction cleanLines(value){
-\t\treturn String(value || '').split(/\\r?\\n/).map(canonicalLine).filter(Boolean);
-\t}
-\tfunction normalizeHost(value){'''
-helper_replacement = r'''\tfunction cleanLines(value){
+replace_once(
+    "\tfunction cleanLines(value){\n\t\treturn String(value || '').split(/\\r?\\n/).map(canonicalLine).filter(Boolean);\n\t}\n\tfunction normalizeHost(value){",
+    """\tfunction cleanLines(value){
 \t\treturn String(value || '').split(/\\r?\\n/).map(canonicalLine).filter(Boolean);
 \t}
 \tfunction splitPreferredLine(value){
@@ -214,34 +184,20 @@ helper_replacement = r'''\tfunction cleanLines(value){
 \t\tconst node = persistedNodes.find(item => String(item?.id || '') === String(id || '')) || null;
 \t\tsetEditorMode(node);
 \t};
-\tfunction normalizeHost(value){'''
-if helper_anchor not in s:
-    raise SystemExit('frontend helper anchor not found')
-s = s.replace(helper_anchor, helper_replacement, 1)
+\tfunction normalizeHost(value){""",
+    'frontend editor helpers',
+)
 
-# loadPersisted now retains IDs and all V2 node metadata.
-old = r'''\t\t\tconst d = await r.json();
-\t\t\tfor (const k of Object.keys(persisted)) delete persisted[k];
-\t\t\tfor (const item of (Array.isArray(d.nodes) ? d.nodes : [])) {
-\t\t\t\tif (item && item.line && item.proxyip) persisted[canonicalLine(item.line)] = String(item.proxyip).trim();
-\t\t\t}
-\t\t} catch (_) {}'''
-new = r'''\t\t\tconst d = await r.json();
-\t\t\tpersistedNodes = Array.isArray(d.nodes) ? d.nodes.map(item => ({ id: String(item?.id || ''), line: canonicalLine(item?.line), proxyip: String(item?.proxyip || '').trim() })).filter(item => item.line) : [];
-\t\t\tfor (const k of Object.keys(persisted)) delete persisted[k];
-\t\t\tfor (const item of persistedNodes) {
-\t\t\t\tif (item.line && item.proxyip) persisted[item.line] = item.proxyip;
-\t\t\t}
-\t\t\trenderExistingNodeOptions();
-\t\t} catch (_) {}'''
-if old not in s:
-    raise SystemExit('loadPersisted block not found')
-s = s.replace(old, new, 1)
+replace_once(
+    "\t\t\tconst d = await r.json();\n\t\t\tfor (const k of Object.keys(persisted)) delete persisted[k];\n\t\t\tfor (const item of (Array.isArray(d.nodes) ? d.nodes : [])) {\n\t\t\t\tif (item && item.line && item.proxyip) persisted[canonicalLine(item.line)] = String(item.proxyip).trim();\n\t\t\t}\n\t\t} catch (_) {}",
+    "\t\t\tconst d = await r.json();\n\t\t\tpersistedNodes = Array.isArray(d.nodes) ? d.nodes.map(item => ({ id: String(item?.id || ''), line: canonicalLine(item?.line), proxyip: String(item?.proxyip || '').trim() })).filter(item => item.line) : [];\n\t\t\tfor (const k of Object.keys(persisted)) delete persisted[k];\n\t\t\tfor (const item of persistedNodes) {\n\t\t\t\tif (item.line && item.proxyip) persisted[item.line] = item.proxyip;\n\t\t\t}\n\t\t\trenderExistingNodeOptions();\n\t\t} catch (_) {}",
+    'loadPersisted body',
+)
 
-# Open popup fresh each time so an existing record can be selected reliably.
-start = s.index(r'''\twindow.openProxyIpModal = function(){''')
-end = s.index(r'''\twindow.closeProxyIpModal = function()''', start)
-new_open = r'''\twindow.openProxyIpModal = async function(){
+# Replace popup opener by marker range.
+start = s.index("\twindow.openProxyIpModal = function(){")
+end = s.index("\twindow.closeProxyIpModal = function()", start)
+s = s[:start] + """\twindow.openProxyIpModal = async function(){
 \t\tconst modal = document.getElementById('proxyIpNodeModal');
 \t\tif (!modal) return;
 \t\ttry { await persistedReady; await loadPersisted(); } catch (_) {}
@@ -249,13 +205,12 @@ new_open = r'''\twindow.openProxyIpModal = async function(){
 \t\tmodal.classList.add('show');
 \t\tsetTimeout(function(){ document.getElementById('proxyIpExistingNode')?.focus(); }, 0);
 \t};
-'''
-s = s[:start] + new_open + s[end:]
+""" + s[end:]
 
-# Add/update action: edit mode uses the exact ID endpoint; add mode keeps the established flow.
-start = s.index(r'''\twindow.addProxyIpNode = function(){''')
-end = s.index(r'''\n\n\tconst chainBtn = document.getElementById('chainProxyBtn');''', start)
-new_action = r'''\twindow.addProxyIpNode = async function(){
+# Replace add action with add/edit dual mode.
+start = s.index("\twindow.addProxyIpNode = function(){")
+end = s.index("\n\n\tconst chainBtn = document.getElementById('chainProxyBtn');", start)
+s = s[:start] + """\twindow.addProxyIpNode = async function(){
 \t\tconst button = document.getElementById('btnAddProxyIp');
 \t\ttry {
 \t\t\tconst name = String(document.getElementById('proxyIpNodeName')?.value || '').replace(/[\\r\\n]+/g, ' ').trim();
@@ -268,7 +223,8 @@ new_action = r'''\twindow.addProxyIpNode = async function(){
 \t\t\tconst line = host + ':' + port + '#' + name;
 \t\t\tconst textarea = document.getElementById('customIPs');
 \t\t\tif (!textarea) throw new Error('未找到自定义优选地址输入框');
-\n\t\t\tif (editingNodeId) {
+
+\t\t\tif (editingNodeId) {
 \t\t\t\tif (button) { button.disabled = true; button.textContent = '保存中…'; }
 \t\t\t\tconst response = await nativeFetch('/admin/proxyip-nodes/update', {
 \t\t\t\t\tmethod: 'POST',
@@ -287,7 +243,8 @@ new_action = r'''\twindow.addProxyIpNode = async function(){
 \t\t\t\tif (typeof showToast === 'function') showToast('✅ ProxyIP 节点已精确更新并保存', 'success');
 \t\t\t\treturn;
 \t\t\t}
-\n\t\t\tconst lines = cleanLines(textarea.value);
+
+\t\t\tconst lines = cleanLines(textarea.value);
 \t\t\tif (!lines.includes(line)) lines.push(line);
 \t\t\ttextarea.value = lines.join('\\n');
 \t\t\tpending[canonicalLine(line)] = proxyip;
@@ -302,17 +259,16 @@ new_action = r'''\twindow.addProxyIpNode = async function(){
 \t\t} finally {
 \t\t\tif (button) { button.disabled = false; button.textContent = editingNodeId ? '保存修改' : '添加'; }
 \t\t}
-\t};'''
-s = s[:start] + new_action + s[end:]
+\t};""" + s[end:]
 
 required = [
     "访问路径 === 'admin/proxyip-nodes/update'",
-    "id=\"proxyIpExistingNode\"",
+    'id="proxyIpExistingNode"',
     "let editingNodeId = '';",
     "button.textContent = '保存修改'",
     "await nativeFetch('/admin/proxyip-nodes/update'",
-    "const nodes = 状态.nodes.map(item => ({ id: item.id",
-    "首次 V2 迁移持久化失败",
+    'const nodes = 状态.nodes.map(item => ({ id: item.id',
+    '首次 V2 迁移持久化失败',
 ]
 missing = [x for x in required if x not in s]
 if missing:
