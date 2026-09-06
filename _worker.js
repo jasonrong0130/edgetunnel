@@ -18,7 +18,7 @@ async function 读取自定义ProxyIP节点映射(env) {
 		const clean = {};
 		for (const [line, proxyip] of Object.entries(parsed)) {
 			if (typeof line !== 'string' || typeof proxyip !== 'string') continue;
-			const key = line.trim(), value = proxyip.trim();
+			const key = 规范化自定义优选行(line), value = proxyip.trim();
 			if (key && value) clean[key] = value;
 		}
 		return clean;
@@ -56,6 +56,16 @@ function 规范化优选节点主机(value) {
 	}
 	if (!/^[a-zA-Z0-9.-]+$/.test(host)) throw new Error('优选域名/IP 格式无效');
 	return host;
+}
+
+function 规范化自定义优选行(value) {
+	const line = String(value || '').replace(/\r/g, '').trim();
+	if (!line) return '';
+	const hash = line.indexOf('#');
+	if (hash < 0) return line;
+	const address = line.slice(0, hash).trim();
+	const name = line.slice(hash + 1).trim();
+	return name ? `${address}#${name}` : address;
 }
 
 const 内嵌ProxyIP检测器前缀 = '/admin/proxyip-checker';
@@ -243,9 +253,19 @@ async function 注入ProxyIP后台入口(response) {
 	const persisted = Object.create(null);
 	const pending = Object.create(null);
 	const nativeFetch = window.fetch.bind(window);
+	let persistedReady = Promise.resolve();
 
+	function canonicalLine(value){
+		const line = String(value || '').replace(/\r/g, '').trim();
+		if (!line) return '';
+		const hash = line.indexOf('#');
+		if (hash < 0) return line;
+		const address = line.slice(0, hash).trim();
+		const name = line.slice(hash + 1).trim();
+		return name ? address + '#' + name : address;
+	}
 	function cleanLines(value){
-		return String(value || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+		return String(value || '').split(/\r?\n/).map(canonicalLine).filter(Boolean);
 	}
 	function normalizeHost(value){
 		let host = String(value || '').trim();
@@ -305,7 +325,7 @@ async function 注入ProxyIP后台入口(response) {
 			const d = await r.json();
 			for (const k of Object.keys(persisted)) delete persisted[k];
 			for (const item of (Array.isArray(d.nodes) ? d.nodes : [])) {
-				if (item && item.line && item.proxyip) persisted[String(item.line).trim()] = String(item.proxyip).trim();
+				if (item && item.line && item.proxyip) persisted[canonicalLine(item.line)] = String(item.proxyip).trim();
 			}
 		} catch (_) {}
 	}
@@ -316,6 +336,7 @@ async function 注入ProxyIP后台入口(response) {
 			const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
 			const pathname = new URL(urlText, location.origin).pathname;
 			if (method === 'POST' && pathname === '/admin/ADD.txt') {
+				await persistedReady;
 				const textarea = document.getElementById('customIPs');
 				const bodyText = (init && typeof init.body === 'string') ? init.body : (textarea ? textarea.value : '');
 				const lineSet = new Set(cleanLines(bodyText));
@@ -374,7 +395,7 @@ async function 注入ProxyIP后台入口(response) {
 			const lines = cleanLines(textarea.value);
 			if (!lines.includes(line)) lines.push(line);
 			textarea.value = lines.join('\n');
-			pending[line] = proxyip;
+			pending[canonicalLine(line)] = proxyip;
 			if (textarea._refreshLineEditor) textarea._refreshLineEditor();
 			try { if (typeof markModified === 'function') markModified('sub'); } catch (_) {}
 			textarea.dispatchEvent(new Event('input', { bubbles: true }));
@@ -391,7 +412,7 @@ async function 注入ProxyIP后台入口(response) {
 	if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
 	document.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
 	window.addEventListener('resize', syncButton);
-	loadPersisted();
+	persistedReady = loadPersisted();
 	syncButton();
 })();
 </script>`;
@@ -691,21 +712,25 @@ export default {
 						} else if (区分大小写访问路径 === 'admin/ADD.txt') { // 保存自定义优选IP
 							try {
 								const customIPs = await request.text();
-								const 当前行集合 = new Set(customIPs.split(/\r?\n/).map(v => v.trim()).filter(Boolean));
-								let 新节点映射 = null;
+								const 当前行列表 = customIPs.split(/?
+/).map(规范化自定义优选行).filter(Boolean);
+								const 当前行集合 = new Set(当前行列表);
+								const 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
+								const 新节点映射 = {};
+								// 先保留仍存在于文本框中的旧绑定。这样前端异步加载、重排、剪切/粘贴都不会误删 ProxyIP。
+								for (const [line, proxyip] of Object.entries(旧节点映射)) {
+									const key = 规范化自定义优选行(line);
+									if (key && 当前行集合.has(key)) 新节点映射[key] = 规范化ProxyIP端点(proxyip);
+								}
 								const 隐藏映射头 = request.headers.get('x-proxyip-nodes');
 								if (隐藏映射头 !== null) {
 									const parsed = JSON.parse(decodeURIComponent(隐藏映射头));
 									if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('ProxyIP 节点映射格式无效');
-									新节点映射 = {};
 									for (const [line, proxyip] of Object.entries(parsed)) {
-										const key = String(line || '').trim();
+										const key = 规范化自定义优选行(line);
 										if (!key || !当前行集合.has(key)) continue;
 										新节点映射[key] = 规范化ProxyIP端点(proxyip);
 									}
-								} else {
-									新节点映射 = await 读取自定义ProxyIP节点映射(env);
-									for (const line of Object.keys(新节点映射)) if (!当前行集合.has(line)) delete 新节点映射[line];
 								}
 								await Promise.all([
 									env.KV.put('ADD.txt', customIPs),
@@ -835,7 +860,13 @@ export default {
 							}
 							// 自定义 ProxyIP 节点应独立追加到订阅，不受随机优选/ADD/远程订阅生成模式影响。
 							const 隐藏ProxyIP节点列表 = Object.keys(自定义ProxyIP节点映射);
-							if (隐藏ProxyIP节点列表.length) 完整优选IP = [...new Set(完整优选IP.concat(隐藏ProxyIP节点列表))];
+							if (隐藏ProxyIP节点列表.length) {
+								const 已有优选行 = new Set(完整优选IP.map(规范化自定义优选行).filter(Boolean));
+								for (const line of 隐藏ProxyIP节点列表) {
+									const key = 规范化自定义优选行(line);
+									if (key && !已有优选行.has(key)) { 完整优选IP.push(line); 已有优选行.add(key); }
+								}
+							}
 							const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
 							const isLoonOrSurge = ua.includes('loon') || ua.includes('surge');
 							const { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
@@ -862,7 +893,7 @@ export default {
 
 								let 完整节点路径 = config_JSON.完整节点路径;
 
-								const 隐藏自定义ProxyIP = 自定义ProxyIP节点映射[String(原始地址).trim()] || '';
+								const 隐藏自定义ProxyIP = 自定义ProxyIP节点映射[规范化自定义优选行(原始地址)] || '';
 								if (隐藏自定义ProxyIP) {
 									完整节点路径 = (`${config_JSON.PATH}/forceproxyip=${隐藏自定义ProxyIP}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
 								} else {
