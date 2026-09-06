@@ -351,6 +351,13 @@ async function 注入ProxyIP后台入口(response) {
 #proxyIpNodeModal .proxyip-address-wrap{display:flex;align-items:center;gap:8px;width:100%}
 #proxyIpNodeModal .proxyip-address-wrap input{flex:1;min-width:0}
 #proxyIpNodeModal select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;background:var(--input-bg,#fff);color:inherit}
+.proxyip-highlight-wrap{position:relative;width:100%}
+.proxyip-highlight-wrap>#customIPs.proxyip-protected-source{position:relative!important;z-index:2;background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important}
+.proxyip-highlight-layer{position:absolute;inset:0;z-index:1;pointer-events:none;margin:0;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;box-sizing:border-box}
+.proxyip-highlight-layer .proxyip-locked-line{color:#dc2626!important;font-weight:700}
+.proxyip-protected-hint{margin:6px 0 0;color:#6b7280;font-size:12px;line-height:1.5}
+.proxyip-protected-hint b{color:#dc2626}
+
 #proxyIpNodeModal .proxyip-prefix{color:#6b7280;font-weight:600;white-space:nowrap}
 #proxyIpNodeModal .proxyip-add-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important}
 </style>
@@ -398,8 +405,11 @@ async function 注入ProxyIP后台入口(response) {
 	const pending = Object.create(null);
 	const nativeFetch = window.fetch.bind(window);
 	let persistedReady = Promise.resolve();
-	let persistedNodes = [];
-	let editingNodeId = '';
+\tlet persistedNodes = [];
+\tlet editingNodeId = '';
+\tlet proxyHighlightLayer = null;
+\tlet proxyHighlightTextarea = null;
+\tlet proxyProtectionBound = false;
 
 	function canonicalLine(value){
 		const line = String(value || '').replace(/\r/g, '').trim();
@@ -481,6 +491,147 @@ async function 注入ProxyIP后台入口(response) {
 		const node = persistedNodes.find(item => String(item?.id || '') === String(id || '')) || null;
 		setEditorMode(node);
 	};
+\tfunction getProtectedProxyLineSet(){
+\t\tconst set = new Set();
+\t\tfor (const item of persistedNodes) {
+\t\t\tif (item && item.proxyip) {
+\t\t\t\tconst line = canonicalLine(item.line);
+\t\t\t\tif (line) set.add(line);
+\t\t\t}
+\t\t}
+\t\tfor (const [line, proxyip] of Object.entries(pending)) {
+\t\t\tif (proxyip) {
+\t\t\t\tconst key = canonicalLine(line);
+\t\t\t\tif (key) set.add(key);
+\t\t\t}
+\t\t}
+\t\treturn set;
+\t}
+\tfunction proxyLineRanges(text){
+\t\tconst value = String(text || '');
+\t\tconst protectedSet = getProtectedProxyLineSet();
+\t\tconst ranges = [];
+\t\tlet start = 0;
+\t\tfor (let i = 0; i <= value.length; i++) {
+\t\t\tif (i !== value.length && value[i] !== '\\n') continue;
+\t\t\tlet raw = value.slice(start, i);
+\t\t\tif (raw.endsWith('\\r')) raw = raw.slice(0, -1);
+\t\t\tconst key = canonicalLine(raw);
+\t\t\tranges.push({ start, end: i, key, protected: !!key && protectedSet.has(key) });
+\t\t\tstart = i + 1;
+\t\t}
+\t\treturn ranges;
+\t}
+\tfunction proxySelectionTouchesProtected(textarea, affectStart, affectEnd){
+\t\treturn proxyLineRanges(textarea.value).filter(r => {
+\t\t\tif (!r.protected) return false;
+\t\t\tif (affectStart === affectEnd) return affectStart >= r.start && affectStart <= r.end;
+\t\t\treturn affectEnd > r.start && affectStart < r.end;
+\t\t});
+\t}
+\tfunction proxySelectionCoversWholeRows(start, end, ranges){
+\t\treturn ranges.every(r => start <= r.start && end >= r.end);
+\t}
+\tfunction proxyLockedMessage(){
+\t\tconst msg = '红色 ProxyIP 节点内容已锁定：可复制、整行剪切/删除、粘贴调整顺序；修改 IP、端口、名称或 ProxyIP 请使用 PROXYIP 弹窗。';
+\t\tif (typeof showToast === 'function') showToast(msg, 'warning');
+\t\telse console.warn(msg);
+\t}
+\tfunction escapeProxyHighlight(value){
+\t\treturn String(value || '').replace(/[&<>]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[ch]));
+\t}
+\tfunction syncProxyTextareaHighlight(){
+\t\tconst textarea = proxyHighlightTextarea || document.getElementById('customIPs');
+\t\tconst layer = proxyHighlightLayer;
+\t\tif (!textarea || !layer) return;
+\t\tconst protectedSet = getProtectedProxyLineSet();
+\t\tconst rawLines = String(textarea.value || '').split('\\n');
+\t\tlayer.innerHTML = rawLines.map((raw, index) => {
+\t\t\tconst display = raw.endsWith('\\r') ? raw.slice(0, -1) : raw;
+\t\t\tconst key = canonicalLine(display);
+\t\t\tconst cls = key && protectedSet.has(key) ? 'proxyip-locked-line' : '';
+\t\t\treturn '<span class="' + cls + '">' + (escapeProxyHighlight(display) || ' ') + '</span>' + (index < rawLines.length - 1 ? '\\n' : '');
+\t\t}).join('');
+\t\tlayer.scrollTop = textarea.scrollTop;
+\t\tlayer.scrollLeft = textarea.scrollLeft;
+\t}
+\tfunction setupProxyTextareaProtection(){
+\t\tconst textarea = document.getElementById('customIPs');
+\t\tif (!textarea) return;
+\t\tif (proxyHighlightTextarea !== textarea || !proxyHighlightLayer) {
+\t\t\tproxyHighlightTextarea = textarea;
+\t\t\tlet wrap = textarea.parentElement && textarea.parentElement.classList?.contains('proxyip-highlight-wrap') ? textarea.parentElement : null;
+\t\t\tif (!wrap) {
+\t\t\t\twrap = document.createElement('div');
+\t\t\t\twrap.className = 'proxyip-highlight-wrap';
+\t\t\t\ttextarea.parentNode.insertBefore(wrap, textarea);
+\t\t\t\twrap.appendChild(textarea);
+\t\t\t}
+\t\t\tlet layer = wrap.querySelector('.proxyip-highlight-layer');
+\t\t\tif (!layer) {
+\t\t\t\tlayer = document.createElement('pre');
+\t\t\t\tlayer.className = 'proxyip-highlight-layer';
+\t\t\t\tlayer.setAttribute('aria-hidden', 'true');
+\t\t\t\twrap.insertBefore(layer, textarea);
+\t\t\t}
+\t\t\tproxyHighlightLayer = layer;
+\t\t\tconst cs = getComputedStyle(textarea);
+\t\t\tfor (const prop of ['fontFamily','fontSize','fontWeight','fontStyle','lineHeight','letterSpacing','textAlign','textTransform','textIndent','tabSize','paddingTop','paddingRight','paddingBottom','paddingLeft','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderTopStyle','borderRightStyle','borderBottomStyle','borderLeftStyle','borderRadius','boxSizing']) {
+\t\t\t\ttry { layer.style[prop] = cs[prop]; } catch (_) {}
+\t\t\t}
+\t\t\tlayer.style.borderColor = 'transparent';
+\t\t\tlayer.style.backgroundColor = cs.backgroundColor;
+\t\t\tlayer.style.color = cs.color;
+\t\t\ttextarea.classList.add('proxyip-protected-source');
+\t\t\ttextarea.style.setProperty('caret-color', cs.color || '#111827', 'important');
+\t\t\tlet hint = wrap.nextElementSibling;
+\t\t\tif (!hint || !hint.classList?.contains('proxyip-protected-hint')) {
+\t\t\t\thint = document.createElement('div');
+\t\t\t\thint.className = 'proxyip-protected-hint';
+\t\t\t\thint.innerHTML = '<b>红色</b> = 已绑定 ProxyIP，内容锁定；可复制、整行剪切/删除、粘贴调整顺序，修改请点 PROXYIP。';
+\t\t\t\twrap.insertAdjacentElement('afterend', hint);
+\t\t\t}
+\t\t\ttextarea.addEventListener('scroll', syncProxyTextareaHighlight);
+\t\t\ttextarea.addEventListener('input', syncProxyTextareaHighlight);
+\t\t}
+\t\tif (!proxyProtectionBound) {
+\t\t\tproxyProtectionBound = true;
+\t\t\ttextarea.addEventListener('beforeinput', function(event){
+\t\t\t\tconst type = String(event.inputType || '');
+\t\t\t\tif (!type || type.startsWith('history')) return;
+\t\t\t\tconst text = textarea.value;
+\t\t\t\tconst start = Number(textarea.selectionStart || 0), end = Number(textarea.selectionEnd || start);
+\t\t\t\tlet affectStart = start, affectEnd = end;
+\t\t\t\tif (start === end && type === 'deleteContentBackward') affectStart = Math.max(0, start - 1);
+\t\t\t\tif (start === end && type === 'deleteContentForward') affectEnd = Math.min(text.length, end + 1);
+\t\t\t\tconst touched = proxySelectionTouchesProtected(textarea, affectStart, affectEnd);
+\t\t\t\tif (!touched.length) return;
+\t\t\t\tconst deletion = type === 'deleteByCut' || type === 'deleteByDrag' || type.startsWith('deleteContent');
+\t\t\t\tif (deletion && start !== end && proxySelectionCoversWholeRows(start, end, touched)) return;
+\t\t\t\tevent.preventDefault();
+\t\t\t\tproxyLockedMessage();
+\t\t\t});
+\t\t\ttextarea.addEventListener('cut', function(event){
+\t\t\t\tconst start = Number(textarea.selectionStart || 0), end = Number(textarea.selectionEnd || start);
+\t\t\t\tif (start === end) return;
+\t\t\t\tconst touched = proxySelectionTouchesProtected(textarea, start, end);
+\t\t\t\tif (touched.length && !proxySelectionCoversWholeRows(start, end, touched)) {
+\t\t\t\t\tevent.preventDefault();
+\t\t\t\t\tproxyLockedMessage();
+\t\t\t\t}
+\t\t\t});
+\t\t\ttextarea.addEventListener('paste', function(event){
+\t\t\t\tconst start = Number(textarea.selectionStart || 0), end = Number(textarea.selectionEnd || start);
+\t\t\t\tconst touched = proxySelectionTouchesProtected(textarea, start, end);
+\t\t\t\tif (touched.length) {
+\t\t\t\t\tevent.preventDefault();
+\t\t\t\t\tproxyLockedMessage();
+\t\t\t\t}
+\t\t\t});
+\t\t}
+\t\tsyncProxyTextareaHighlight();
+\t}
+
 	function normalizeHost(value){
 		let host = String(value || '').trim();
 		if (!host || host.includes('://') || /[\s/#$]/.test(host)) throw new Error('优选域名 / IP 格式无效');
@@ -543,6 +694,8 @@ async function 注入ProxyIP后台入口(response) {
 				if (item.line && item.proxyip) persisted[item.line] = item.proxyip;
 			}
 			renderExistingNodeOptions();
+			setupProxyTextareaProtection();
+			syncProxyTextareaHighlight();
 		} catch (_) {}
 	}
 
@@ -624,6 +777,8 @@ async function 注入ProxyIP后台入口(response) {
 			if (!lines.includes(line)) lines.push(line);
 			textarea.value = lines.join('\n');
 			pending[canonicalLine(line)] = proxyip;
+			setupProxyTextareaProtection();
+			syncProxyTextareaHighlight();
 			if (textarea._refreshLineEditor) textarea._refreshLineEditor();
 			try { if (typeof markModified === 'function') markModified('sub'); } catch (_) {}
 			textarea.dispatchEvent(new Event('input', { bubbles: true }));
@@ -642,8 +797,10 @@ async function 注入ProxyIP后台入口(response) {
 	if (chainBtn) new MutationObserver(syncButton).observe(chainBtn, { attributes: true, attributeFilter: ['class','style'] });
 	document.getElementById('ipMode')?.addEventListener('change', function(){ setTimeout(syncButton, 0); });
 	window.addEventListener('resize', syncButton);
+	setupProxyTextareaProtection();
 	persistedReady = loadPersisted();
 	syncButton();
+	syncProxyTextareaHighlight();
 })();
 </script>`;
 
