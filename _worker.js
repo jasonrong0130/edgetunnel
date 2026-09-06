@@ -712,8 +712,7 @@ export default {
 						} else if (区分大小写访问路径 === 'admin/ADD.txt') { // 保存自定义优选IP
 							try {
 								const customIPs = await request.text();
-								const 当前行列表 = customIPs.split(/?
-/).map(规范化自定义优选行).filter(Boolean);
+								const 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
 								const 当前行集合 = new Set(当前行列表);
 								const 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
 								const 新节点映射 = {};
