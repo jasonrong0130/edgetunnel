@@ -1,0 +1,46 @@
+name: One-shot malformed regex repair
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-broken-regex.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Repair malformed regex and validate worker
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('_worker.js')
+          s = path.read_text(encoding='utf-8')
+          broken = "customIPs.split(/\n?\n/).map(规范化自定义优选行).filter(Boolean)"
+          fixed = r"customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean)"
+          if broken not in s:
+              raise SystemExit('expected malformed split regex not found')
+          s = s.replace(broken, fixed, 1)
+          path.write_text(s, encoding='utf-8')
+          PY
+
+          node --check _worker.js
+          git diff --check
+
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-broken-regex.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js .github/workflows/fix-broken-regex.yml
+          git commit -m 'fix: repair malformed ADD.txt split regex'
+          git push origin HEAD:main
