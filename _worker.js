@@ -72,11 +72,14 @@ async function 读取自定义ProxyIP节点记录(env) {
 	const lines = String(customIPs || '').split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
 	const seenLines = new Set(lines);
 	for (const line of Object.keys(legacy)) if (!seenLines.has(line)) { lines.push(line); seenLines.add(line); }
-	return {
+	const migrated = {
 		version: 2,
-		updatedAt: 0,
+		updatedAt: Date.now(),
 		nodes: lines.map(line => ({ id: 生成自定义ProxyIP节点ID(), line, proxyip: legacy[line] || '' })),
 	};
+	try { await env.KV.put(自定义ProxyIP节点V2KV键, JSON.stringify(migrated, null, 2)); }
+	catch (error) { log(`[ProxyIP节点] 首次 V2 迁移持久化失败: ${error?.message || error}`); }
+	return migrated;
 }
 
 async function 读取自定义ProxyIP节点映射(env) {
@@ -347,13 +350,20 @@ async function 注入ProxyIP后台入口(response) {
 #proxyIpNodeModal .proxyip-save-hint{margin:4px 0 0;color:#6b7280;font-size:13px;line-height:1.55}
 #proxyIpNodeModal .proxyip-address-wrap{display:flex;align-items:center;gap:8px;width:100%}
 #proxyIpNodeModal .proxyip-address-wrap input{flex:1;min-width:0}
+#proxyIpNodeModal select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;background:var(--input-bg,#fff);color:inherit}
 #proxyIpNodeModal .proxyip-prefix{color:#6b7280;font-weight:600;white-space:nowrap}
 #proxyIpNodeModal .proxyip-add-btn{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)!important;color:#fff!important}
 </style>
 <div class="modal-overlay" id="proxyIpNodeModal" onclick="if(event.target===this) closeProxyIpModal()">
 	<div class="modal api-optimize-modal chain-proxy-modal">
-		<h2 class="api-optimize-modal-title">添加 ProxyIP 节点</h2>
+		<h2 class="api-optimize-modal-title" id="proxyIpModalTitle">ProxyIP 节点</h2>
 		<div class="api-form-group chain-proxy-form">
+			<div class="api-form-row-item">
+				<label for="proxyIpExistingNode">已有节点:</label>
+				<select id="proxyIpExistingNode" title="选择已有 ProxyIP 节点" onchange="selectProxyIpNode(this.value)">
+					<option value="">＋ 新增 ProxyIP 节点</option>
+				</select>
+			</div>
 			<div class="api-form-row-item">
 				<label for="proxyIpNodeName">节点名称:</label>
 				<input type="text" id="proxyIpNodeName" title="节点名称" placeholder="例如：香港高速">
@@ -374,7 +384,7 @@ async function 注入ProxyIP后台入口(response) {
 				</div>
 			</div>
 		</div>
-		<p class="proxyip-save-hint">填写节点信息后可直接添加。点击“可用性验证”会在新选项卡调用独立 VPS 上的 ProxyIP Scanner，并自动带入当前 ProxyIP；检测结果不影响添加。添加后点击原页面“保存”才正式生效。</p>
+		<p class="proxyip-save-hint" id="proxyIpSaveHint">新增节点填写后点击“添加”，再点击原页面“保存”生效；编辑已有节点时点击“保存修改”会按内部节点 ID 直接保存，不需要删除重建。</p>
 		<div class="api-buttons chain-proxy-buttons">
 			<button type="button" class="btn btn-verify-api" id="btnVerifyProxyIp" onclick="openProxyIpChecker()">可用性验证</button>
 			<button type="button" class="btn btn-chain-add proxyip-add-btn" id="btnAddProxyIp" onclick="addProxyIpNode()">添加</button>
@@ -388,6 +398,8 @@ async function 注入ProxyIP后台入口(response) {
 	const pending = Object.create(null);
 	const nativeFetch = window.fetch.bind(window);
 	let persistedReady = Promise.resolve();
+	let persistedNodes = [];
+	let editingNodeId = '';
 
 	function canonicalLine(value){
 		const line = String(value || '').replace(/\r/g, '').trim();
@@ -401,6 +413,74 @@ async function 注入ProxyIP后台入口(response) {
 	function cleanLines(value){
 		return String(value || '').split(/\r?\n/).map(canonicalLine).filter(Boolean);
 	}
+	function splitPreferredLine(value){
+		const line = canonicalLine(value);
+		const hash = line.indexOf('#');
+		const address = (hash < 0 ? line : line.slice(0, hash)).trim();
+		const name = hash < 0 ? '' : line.slice(hash + 1).trim();
+		let host = address, port = '443';
+		if (address.startsWith('[')) {
+			const close = address.indexOf(']');
+			if (close >= 0) {
+				host = address.slice(0, close + 1);
+				if (address[close + 1] === ':' && /^\d+$/.test(address.slice(close + 2))) port = address.slice(close + 2);
+			}
+		} else {
+			const colon = address.lastIndexOf(':');
+			if (colon > 0 && /^\d+$/.test(address.slice(colon + 1))) { host = address.slice(0, colon); port = address.slice(colon + 1); }
+		}
+		return { line, host, port, name };
+	}
+	function renderExistingNodeOptions(){
+		const select = document.getElementById('proxyIpExistingNode');
+		if (!select) return;
+		select.innerHTML = '<option value="">＋ 新增 ProxyIP 节点</option>';
+		for (const item of persistedNodes.filter(v => v && v.id && v.proxyip)) {
+			const option = document.createElement('option');
+			option.value = String(item.id);
+			option.textContent = String(item.line || '') + '  →  ' + String(item.proxyip || '');
+			select.appendChild(option);
+		}
+		select.value = editingNodeId || '';
+	}
+	function setEditorMode(node){
+		const title = document.getElementById('proxyIpModalTitle');
+		const hint = document.getElementById('proxyIpSaveHint');
+		const button = document.getElementById('btnAddProxyIp');
+		const hostInput = document.getElementById('proxyIpPreferredHost');
+		const portInput = document.getElementById('proxyIpPreferredPort');
+		const nameInput = document.getElementById('proxyIpNodeName');
+		const proxyInput = document.getElementById('proxyIpAddress');
+		if (node) {
+			editingNodeId = String(node.id || '');
+			const parsed = splitPreferredLine(node.line);
+			if (hostInput) hostInput.value = parsed.host;
+			if (portInput) portInput.value = parsed.port;
+			if (nameInput) nameInput.value = parsed.name;
+			if (proxyInput) proxyInput.value = String(node.proxyip || '');
+			if (title) title.textContent = '编辑 ProxyIP 节点';
+			if (button) button.textContent = '保存修改';
+			if (hint) hint.textContent = '当前按内部稳定节点 ID 编辑。优选 IP、端口、节点名称、ProxyIP 都可以单独修改，其他字段不会因为修改而丢失绑定。';
+		} else {
+			editingNodeId = '';
+			if (nameInput) nameInput.value = '';
+			if (proxyInput) proxyInput.value = '';
+			if (portInput) portInput.value = '443';
+			if (hostInput) {
+				let def = '';
+				try { if (typeof getDefaultChainProxyHost === 'function') def = getDefaultChainProxyHost(); } catch (_) {}
+				hostInput.value = def || String(window.location.hostname || '');
+			}
+			if (title) title.textContent = '添加 ProxyIP 节点';
+			if (button) button.textContent = '添加';
+			if (hint) hint.textContent = '新增节点填写后点击“添加”，再点击原页面“保存”正式生效。已有节点请从上方下拉框选择后直接修改。';
+		}
+		renderExistingNodeOptions();
+	}
+	window.selectProxyIpNode = function(id){
+		const node = persistedNodes.find(item => String(item?.id || '') === String(id || '')) || null;
+		setEditorMode(node);
+	};
 	function normalizeHost(value){
 		let host = String(value || '').trim();
 		if (!host || host.includes('://') || /[\s/#$]/.test(host)) throw new Error('优选域名 / IP 格式无效');
@@ -457,10 +537,12 @@ async function 注入ProxyIP后台入口(response) {
 			const r = await nativeFetch('/admin/proxyip-nodes.json?_t=' + Date.now(), { cache: 'no-store' });
 			if (!r.ok) return;
 			const d = await r.json();
+			persistedNodes = Array.isArray(d.nodes) ? d.nodes.map(item => ({ id: String(item?.id || ''), line: canonicalLine(item?.line), proxyip: String(item?.proxyip || '').trim() })).filter(item => item.line) : [];
 			for (const k of Object.keys(persisted)) delete persisted[k];
-			for (const item of (Array.isArray(d.nodes) ? d.nodes : [])) {
-				if (item && item.line && item.proxyip) persisted[canonicalLine(item.line)] = String(item.proxyip).trim();
+			for (const item of persistedNodes) {
+				if (item.line && item.proxyip) persisted[item.line] = item.proxyip;
 			}
+			renderExistingNodeOptions();
 		} catch (_) {}
 	}
 
@@ -495,26 +577,17 @@ async function 注入ProxyIP后台入口(response) {
 		return nativeFetch(input, init);
 	};
 
-	window.openProxyIpModal = function(){
+	window.openProxyIpModal = async function(){
 		const modal = document.getElementById('proxyIpNodeModal');
-		const hostInput = document.getElementById('proxyIpPreferredHost');
-		const portInput = document.getElementById('proxyIpPreferredPort');
-		const nameInput = document.getElementById('proxyIpNodeName');
-		const proxyInput = document.getElementById('proxyIpAddress');
 		if (!modal) return;
-		if (nameInput) nameInput.value = '';
-		if (proxyInput) proxyInput.value = '';
-		if (portInput) portInput.value = '443';
-		if (hostInput) {
-			let def = '';
-			try { if (typeof getDefaultChainProxyHost === 'function') def = getDefaultChainProxyHost(); } catch (_) {}
-			hostInput.value = def || String(window.location.hostname || '');
-		}
+		try { await persistedReady; await loadPersisted(); } catch (_) {}
+		setEditorMode(null);
 		modal.classList.add('show');
-		setTimeout(function(){ nameInput && nameInput.focus(); }, 0);
+		setTimeout(function(){ document.getElementById('proxyIpExistingNode')?.focus(); }, 0);
 	};
 	window.closeProxyIpModal = function(){ document.getElementById('proxyIpNodeModal')?.classList.remove('show'); };
-	window.addProxyIpNode = function(){
+	window.addProxyIpNode = async function(){
+		const button = document.getElementById('btnAddProxyIp');
 		try {
 			const name = String(document.getElementById('proxyIpNodeName')?.value || '').replace(/[\r\n]+/g, ' ').trim();
 			if (!name) throw new Error('请输入节点名称');
@@ -526,6 +599,27 @@ async function 注入ProxyIP后台入口(response) {
 			const line = host + ':' + port + '#' + name;
 			const textarea = document.getElementById('customIPs');
 			if (!textarea) throw new Error('未找到自定义优选地址输入框');
+
+			if (editingNodeId) {
+				if (button) { button.disabled = true; button.textContent = '保存中…'; }
+				const response = await nativeFetch('/admin/proxyip-nodes/update', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json;charset=utf-8' },
+					body: JSON.stringify({ id: editingNodeId, host, port, name, proxyip }),
+				});
+				let data = {};
+				try { data = await response.json(); } catch (_) {}
+				if (!response.ok) throw new Error(data.error || ('保存失败：HTTP ' + response.status));
+				textarea.value = String(data.customIPs || textarea.value);
+				if (textarea._refreshLineEditor) textarea._refreshLineEditor();
+				textarea.dispatchEvent(new Event('input', { bubbles: true }));
+				for (const k of Object.keys(pending)) delete pending[k];
+				await loadPersisted();
+				window.closeProxyIpModal();
+				if (typeof showToast === 'function') showToast('✅ ProxyIP 节点已精确更新并保存', 'success');
+				return;
+			}
+
 			const lines = cleanLines(textarea.value);
 			if (!lines.includes(line)) lines.push(line);
 			textarea.value = lines.join('\n');
@@ -538,6 +632,8 @@ async function 注入ProxyIP后台入口(response) {
 		} catch (error) {
 			if (typeof showToast === 'function') showToast(error.message || String(error), 'error');
 			else alert(error.message || String(error));
+		} finally {
+			if (button) { button.disabled = false; button.textContent = editingNodeId ? '保存修改' : '添加'; }
 		}
 	};
 
@@ -769,9 +865,9 @@ export default {
 					}
 
 					if (访问路径 === 'admin/proxyip-nodes.json' && request.method === 'GET') {
-						const 节点映射 = await 读取自定义ProxyIP节点映射(env);
-						const nodes = Object.entries(节点映射).map(([line, proxyip]) => ({ line, proxyip }));
-						return new Response(JSON.stringify({ success: true, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
+						const 状态 = await 读取自定义ProxyIP节点记录(env);
+						const nodes = 状态.nodes.map(item => ({ id: item.id, line: item.line, proxyip: item.proxyip || '' }));
+						return new Response(JSON.stringify({ success: true, version: 2, updatedAt: 状态.updatedAt || 0, nodes }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
 					}
 
 					config_JSON = await 读取config_JSON(env, host, userID, UA);
@@ -787,7 +883,55 @@ export default {
 							return new Response(JSON.stringify(errorResponse, null, 2), { status: 500, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 						}
 					} else if (request.method === 'POST') {// 处理 KV 操作（POST 请求）
-						if (访问路径 === 'admin/config.json') { // 保存config.json配置
+						if (访问路径 === 'admin/proxyip-nodes/update') { // 按稳定 ID 精确编辑 ProxyIP 节点
+							try {
+								const input = await request.json();
+								const id = String(input?.id || '').trim();
+								if (!id) return new Response(JSON.stringify({ error: '缺少节点 ID' }), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+								const 节点名称 = String(input?.name || '').replace(/[\r\n]+/g, ' ').trim();
+								if (!节点名称) return new Response(JSON.stringify({ error: '节点名称不能为空' }), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+								if (节点名称.length > 120) return new Response(JSON.stringify({ error: '节点名称不能超过 120 个字符' }), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+								const 优选主机 = 规范化优选节点主机(input?.host);
+								const 优选端口 = Number(String(input?.port || '443').trim());
+								if (!Number.isInteger(优选端口) || 优选端口 < 1 || 优选端口 > 65535) throw new Error('优选端口必须为 1~65535');
+								const ProxyIP = 规范化ProxyIP端点(input?.proxyip);
+								const 新行 = 规范化自定义优选行(`${优选主机}:${优选端口}#${节点名称}`);
+
+								const 状态 = await 读取自定义ProxyIP节点记录(env);
+								const index = 状态.nodes.findIndex(item => String(item.id) === id);
+								if (index < 0) return new Response(JSON.stringify({ error: '节点不存在或已被删除，请重新打开编辑窗口' }), { status: 404, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+								if (状态.nodes.some((item, i) => i !== index && 规范化自定义优选行(item.line) === 新行)) {
+									return new Response(JSON.stringify({ error: '修改后会与另一条节点完全重复，请调整节点名称' }), { status: 409, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+								}
+
+								const 旧行 = 规范化自定义优选行(状态.nodes[index].line);
+								状态.nodes[index] = { ...状态.nodes[index], id, line: 新行, proxyip: ProxyIP };
+								const 当前文本 = await env.KV.get('ADD.txt') || '';
+								const 当前行列表 = 当前文本.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+								let 已替换 = false;
+								const 新行列表 = 当前行列表.map(line => {
+									if (!已替换 && line === 旧行) { 已替换 = true; return 新行; }
+									return line;
+								});
+								if (!已替换) 新行列表.push(新行);
+
+								const 更新时间 = Date.now();
+								const V2状态 = { version: 2, updatedAt: 更新时间, nodes: 状态.nodes };
+								const 兼容旧映射 = {};
+								for (const item of 状态.nodes) if (item.proxyip) 兼容旧映射[规范化自定义优选行(item.line)] = item.proxyip;
+								const 新文本 = 新行列表.join('\n');
+								await Promise.all([
+									env.KV.put('ADD.txt', 新文本),
+									env.KV.put(自定义ProxyIP节点V2KV键, JSON.stringify(V2状态, null, 2)),
+									env.KV.put(自定义ProxyIP节点KV键, JSON.stringify(兼容旧映射, null, 2)),
+								]);
+								ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Update_ProxyIP_Node', config_JSON));
+								return new Response(JSON.stringify({ success: true, message: 'ProxyIP 节点已更新', id, line: 新行, proxyip: ProxyIP, customIPs: 新文本, updatedAt: 更新时间 }), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
+							} catch (error) {
+								console.error('更新 ProxyIP 节点失败:', error);
+								return new Response(JSON.stringify({ error: '更新 ProxyIP 节点失败: ' + error.message }), { status: 500, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+							}
+						} else if (访问路径 === 'admin/config.json') { // 保存config.json配置
 							try {
 								const newConfig = await request.json();
 								// 验证配置完整性
