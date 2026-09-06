@@ -1,0 +1,232 @@
+from pathlib import Path
+
+path = Path('_worker.js')
+s = path.read_text(encoding='utf-8')
+original = s
+
+start_marker = "const 自定义ProxyIP节点KV键 = 'proxyip-nodes.json';"
+end_marker = "function 规范化ProxyIP端点(value) {"
+start = s.index(start_marker)
+end = s.index(end_marker, start)
+helpers = r'''const 自定义ProxyIP节点KV键 = 'proxyip-nodes.json';
+const 自定义ProxyIP节点V2KV键 = 'proxyip-nodes-v2.json';
+
+function 生成自定义ProxyIP节点ID() {
+	try { return crypto.randomUUID(); }
+	catch (_) { return `pxy_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`; }
+}
+
+function 拆分自定义优选行(value) {
+	const line = 规范化自定义优选行(value);
+	const hash = line.indexOf('#');
+	return hash < 0
+		? { line, address: line, name: '' }
+		: { line, address: line.slice(0, hash).trim(), name: line.slice(hash + 1).trim() };
+}
+
+async function 读取旧版自定义ProxyIP节点映射(env) {
+	try {
+		const raw = await env.KV.get(自定义ProxyIP节点KV键);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return {};
+		const clean = {};
+		for (const [line, proxyip] of Object.entries(parsed)) {
+			if (typeof line !== 'string' || typeof proxyip !== 'string') continue;
+			const key = 规范化自定义优选行(line), value = proxyip.trim();
+			if (key && value) clean[key] = value;
+		}
+		return clean;
+	} catch (error) {
+		log(`[ProxyIP节点] 读取旧版隐藏映射失败: ${error?.message || error}`);
+		return {};
+	}
+}
+
+async function 读取自定义ProxyIP节点记录(env) {
+	try {
+		const raw = await env.KV.get(自定义ProxyIP节点V2KV键);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			if (parsed && parsed.version === 2 && Array.isArray(parsed.nodes)) {
+				const seen = new Set(), nodes = [];
+				for (const item of parsed.nodes) {
+					if (!item || typeof item !== 'object') continue;
+					const line = 规范化自定义优选行(item.line);
+					let id = String(item.id || '').trim();
+					if (!line) continue;
+					if (!id || seen.has(id)) id = 生成自定义ProxyIP节点ID();
+					seen.add(id);
+					nodes.push({ id, line, proxyip: String(item.proxyip || '').trim() });
+				}
+				return { version: 2, updatedAt: Number(parsed.updatedAt || 0), nodes };
+			}
+		}
+	} catch (error) {
+		log(`[ProxyIP节点] 读取 V2 节点记录失败: ${error?.message || error}`);
+	}
+
+	const [customIPs, legacy] = await Promise.all([
+		env.KV.get('ADD.txt').catch(() => ''),
+		读取旧版自定义ProxyIP节点映射(env),
+	]);
+	const lines = String(customIPs || '').split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+	const seenLines = new Set(lines);
+	for (const line of Object.keys(legacy)) if (!seenLines.has(line)) { lines.push(line); seenLines.add(line); }
+	return {
+		version: 2,
+		updatedAt: 0,
+		nodes: lines.map(line => ({ id: 生成自定义ProxyIP节点ID(), line, proxyip: legacy[line] || '' })),
+	};
+}
+
+async function 读取自定义ProxyIP节点映射(env) {
+	const state = await 读取自定义ProxyIP节点记录(env);
+	const clean = {};
+	for (const item of state.nodes) {
+		const line = 规范化自定义优选行(item.line), proxyip = String(item.proxyip || '').trim();
+		if (line && proxyip) clean[line] = proxyip;
+	}
+	return clean;
+}
+
+function 协调自定义ProxyIP节点记录(oldNodes, currentLines) {
+	const old = (Array.isArray(oldNodes) ? oldNodes : []).map((item, index) => ({
+		id: String(item?.id || '').trim() || 生成自定义ProxyIP节点ID(),
+		line: 规范化自定义优选行(item?.line),
+		proxyip: String(item?.proxyip || '').trim(),
+		index,
+	})).filter(item => item.line);
+	const lines = (Array.isArray(currentLines) ? currentLines : []).map(规范化自定义优选行).filter(Boolean);
+	const result = new Array(lines.length).fill(null);
+	const used = new Set();
+
+	function pick(candidates, newIndex) {
+		let best = -1, bestDistance = Infinity;
+		for (const idx of candidates) {
+			if (used.has(idx)) continue;
+			const distance = Math.abs(old[idx].index - newIndex);
+			if (distance < bestDistance) { best = idx; bestDistance = distance; }
+		}
+		return best;
+	}
+	function assign(newIndex, oldIndex) {
+		if (oldIndex < 0) return false;
+		used.add(oldIndex);
+		result[newIndex] = { id: old[oldIndex].id, line: lines[newIndex], proxyip: old[oldIndex].proxyip };
+		return true;
+	}
+
+	const byLine = new Map();
+	for (let i = 0; i < old.length; i++) {
+		if (!byLine.has(old[i].line)) byLine.set(old[i].line, []);
+		byLine.get(old[i].line).push(i);
+	}
+	for (let i = 0; i < lines.length; i++) assign(i, pick(byLine.get(lines[i]) || [], i));
+
+	const byName = new Map();
+	for (let i = 0; i < old.length; i++) {
+		if (used.has(i)) continue;
+		const name = 拆分自定义优选行(old[i].line).name;
+		if (!name) continue;
+		if (!byName.has(name)) byName.set(name, []);
+		byName.get(name).push(i);
+	}
+	for (let i = 0; i < lines.length; i++) {
+		if (result[i]) continue;
+		const name = 拆分自定义优选行(lines[i]).name;
+		if (name) assign(i, pick(byName.get(name) || [], i));
+	}
+
+	const byAddress = new Map();
+	for (let i = 0; i < old.length; i++) {
+		if (used.has(i)) continue;
+		const address = 拆分自定义优选行(old[i].line).address;
+		if (!address) continue;
+		if (!byAddress.has(address)) byAddress.set(address, []);
+		byAddress.get(address).push(i);
+	}
+	for (let i = 0; i < lines.length; i++) {
+		if (result[i]) continue;
+		const address = 拆分自定义优选行(lines[i]).address;
+		if (address) assign(i, pick(byAddress.get(address) || [], i));
+	}
+
+	const unmatchedOld = old.map((_, i) => i).filter(i => !used.has(i));
+	const unmatchedNew = lines.map((_, i) => i).filter(i => !result[i]);
+	if (old.length === lines.length && unmatchedOld.length === 1 && unmatchedNew.length === 1) {
+		assign(unmatchedNew[0], unmatchedOld[0]);
+	}
+	for (let i = 0; i < lines.length; i++) {
+		if (!result[i]) result[i] = { id: 生成自定义ProxyIP节点ID(), line: lines[i], proxyip: '' };
+	}
+	return result;
+}
+
+'''
+s = s[:start] + helpers + s[end:]
+
+block_start_marker = "\t\t\t\t\t\t} else if (区分大小写访问路径 === 'admin/ADD.txt') { // 保存自定义优选IP"
+block_end_marker = "\n\t\t\t\t\t\t} else return new Response(JSON.stringify({ error: '不支持的POST请求路径' })"
+bs = s.index(block_start_marker)
+be = s.index(block_end_marker, bs)
+new_block = r'''						} else if (区分大小写访问路径 === 'admin/ADD.txt') { // 保存自定义优选IP
+							try {
+								const customIPs = await request.text();
+								const 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+								const 旧状态 = await 读取自定义ProxyIP节点记录(env);
+								const 新节点记录 = 协调自定义ProxyIP节点记录(旧状态.nodes, 当前行列表);
+
+								// header 只负责明确新增/更新；未出现在 header 中的旧 ProxyIP 绑定绝不删除。
+								const 隐藏映射头 = request.headers.get('x-proxyip-nodes');
+								if (隐藏映射头 !== null) {
+									const parsed = JSON.parse(decodeURIComponent(隐藏映射头));
+									if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('ProxyIP 节点映射格式无效');
+									const 按行记录 = new Map();
+									for (const item of 新节点记录) {
+										if (!按行记录.has(item.line)) 按行记录.set(item.line, []);
+										按行记录.get(item.line).push(item);
+									}
+									for (const [line, proxyip] of Object.entries(parsed)) {
+										const key = 规范化自定义优选行(line);
+										if (!key) continue;
+										const matches = 按行记录.get(key) || [];
+										if (!matches.length) continue;
+										matches[0].proxyip = 规范化ProxyIP端点(proxyip);
+									}
+								}
+
+								const 更新时间 = Date.now();
+								const V2状态 = { version: 2, updatedAt: 更新时间, nodes: 新节点记录 };
+								const 兼容旧映射 = {};
+								for (const item of 新节点记录) if (item.proxyip) 兼容旧映射[item.line] = item.proxyip;
+
+								await Promise.all([
+									env.KV.put('ADD.txt', customIPs),
+									env.KV.put(自定义ProxyIP节点V2KV键, JSON.stringify(V2状态, null, 2)),
+									env.KV.put(自定义ProxyIP节点KV键, JSON.stringify(兼容旧映射, null, 2)),
+								]);
+								ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Save_Custom_IPs', config_JSON));
+								return new Response(JSON.stringify({ success: true, message: '自定义IP已保存', proxyipSchema: 2, updatedAt: 更新时间 }), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+							} catch (error) {
+								console.error('保存自定义IP失败:', error);
+								return new Response(JSON.stringify({ error: '保存自定义IP失败: ' + error.message }), { status: 500, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+							}'''
+s = s[:bs] + new_block + s[be:]
+
+required = [
+    "const 自定义ProxyIP节点V2KV键 = 'proxyip-nodes-v2.json';",
+    'function 协调自定义ProxyIP节点记录(oldNodes, currentLines)',
+    'const 旧状态 = await 读取自定义ProxyIP节点记录(env);',
+    '旧 ProxyIP 绑定绝不删除',
+    'env.KV.put(自定义ProxyIP节点V2KV键',
+]
+missing = [x for x in required if x not in s]
+if missing:
+    raise SystemExit('post-patch assertions failed: ' + repr(missing))
+if 'const 旧CustomIPs = await env.KV.get' in s:
+    raise SystemExit('old positional rename migration block still present')
+if s == original:
+    raise SystemExit('no changes produced')
+
+path.write_text(s, encoding='utf-8')
