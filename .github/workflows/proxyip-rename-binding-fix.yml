@@ -1,0 +1,142 @@
+name: One-shot ProxyIP rename binding repair
+
+on:
+  push:
+    paths:
+      - '.github/workflows/proxyip-rename-binding-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve ProxyIP binding across direct row edits
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('_worker.js')
+          s = path.read_text(encoding='utf-8')
+          original = s
+
+          # Frontend: treat direct editing of one visible row as the same logical node.
+          fetch_anchor = r'''\twindow.fetch = async function(input, init){'''
+          frontend = r'''\tlet lastCustomLines = [];
+\tfunction bindCustomLineRenameTracking(){
+\t\tconst textarea = document.getElementById('customIPs');
+\t\tif (!textarea || textarea.dataset.proxyipRenameTracking === '1') return;
+\t\ttextarea.dataset.proxyipRenameTracking = '1';
+\t\tlastCustomLines = cleanLines(textarea.value);
+\t\ttextarea.addEventListener('focus', function(){ lastCustomLines = cleanLines(textarea.value); });
+\t\ttextarea.addEventListener('beforeinput', function(){ lastCustomLines = cleanLines(textarea.value); });
+\t\ttextarea.addEventListener('input', async function(){
+\t\t\tconst previous = lastCustomLines;
+\t\t\tconst current = cleanLines(textarea.value);
+\t\t\tlastCustomLines = current;
+\t\t\tconst previousSet = new Set(previous);
+\t\t\tconst currentSet = new Set(current);
+\t\t\tconst removed = previous.filter(line => !currentSet.has(line));
+\t\t\tconst added = current.filter(line => !previousSet.has(line));
+\t\t\tif (removed.length !== 1 || added.length !== 1) return;
+\t\t\tawait persistedReady;
+\t\t\tconst oldLine = removed[0], newLine = added[0];
+\t\t\tconst proxyip = pending[oldLine] || persisted[oldLine] || '';
+\t\t\tif (!proxyip) return;
+\t\t\tpending[newLine] = proxyip;
+\t\t\tdelete pending[oldLine];
+\t\t});
+\t}
+
+'''
+          if 'function bindCustomLineRenameTracking()' not in s:
+              if fetch_anchor not in s:
+                  raise SystemExit('frontend fetch anchor not found')
+              s = s.replace(fetch_anchor, frontend + fetch_anchor, 1)
+
+          ready_old = r'''\tpersistedReady = loadPersisted();
+\tsyncButton();'''
+          ready_new = r'''\tpersistedReady = loadPersisted();
+\tbindCustomLineRenameTracking();
+\tsyncButton();'''
+          if ready_old in s:
+              s = s.replace(ready_old, ready_new, 1)
+          elif ready_new not in s:
+              raise SystemExit('frontend init anchor not found')
+
+          # Backend safety net: if exactly one row changed in-place, migrate the old binding.
+          backend_old = r'''\t\t\t\t\t\t\t\tconst 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+\t\t\t\t\t\t\t\tconst 当前行集合 = new Set(当前行列表);
+\t\t\t\t\t\t\t\tconst 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
+\t\t\t\t\t\t\t\tconst 新节点映射 = {};'''
+          backend_new = r'''\t\t\t\t\t\t\t\tconst 当前行列表 = customIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+\t\t\t\t\t\t\t\tconst 当前行集合 = new Set(当前行列表);
+\t\t\t\t\t\t\t\tconst 旧节点映射 = await 读取自定义ProxyIP节点映射(env);
+\t\t\t\t\t\t\t\tconst 旧CustomIPs = await env.KV.get('ADD.txt') || '';
+\t\t\t\t\t\t\t\tconst 旧行列表 = 旧CustomIPs.split(/\r?\n/).map(规范化自定义优选行).filter(Boolean);
+\t\t\t\t\t\t\t\tconst 新节点映射 = {};'''
+          if backend_old in s:
+              s = s.replace(backend_old, backend_new, 1)
+          elif "const 旧CustomIPs = await env.KV.get('ADD.txt') || '';" not in s:
+              raise SystemExit('backend old-list anchor not found')
+
+          preserve_anchor = r'''\t\t\t\t\t\t\t\tconst 隐藏映射头 = request.headers.get('x-proxyip-nodes');'''
+          migration = r'''\t\t\t\t\t\t\t\t// 单行原地编辑（例如只修改 # 后面的节点名称）视为同一逻辑节点，ProxyIP 跟随迁移。
+\t\t\t\t\t\t\t\tconst 旧行集合 = new Set(旧行列表);
+\t\t\t\t\t\t\t\tconst 已删除旧绑定行 = 旧行列表.filter(line => !当前行集合.has(line) && 旧节点映射[line]);
+\t\t\t\t\t\t\t\tconst 新增当前行 = 当前行列表.filter(line => !旧行集合.has(line));
+\t\t\t\t\t\t\t\tif (旧行列表.length === 当前行列表.length && 已删除旧绑定行.length === 1 && 新增当前行.length === 1) {
+\t\t\t\t\t\t\t\t\tlet 差异位置数 = 0, 旧差异行 = '', 新差异行 = '';
+\t\t\t\t\t\t\t\t\tfor (let i = 0; i < 旧行列表.length; i++) {
+\t\t\t\t\t\t\t\t\t\tif (旧行列表[i] === 当前行列表[i]) continue;
+\t\t\t\t\t\t\t\t\t\t差异位置数++;
+\t\t\t\t\t\t\t\t\t\t旧差异行 = 旧行列表[i];
+\t\t\t\t\t\t\t\t\t\t新差异行 = 当前行列表[i];
+\t\t\t\t\t\t\t\t\t\tif (差异位置数 > 1) break;
+\t\t\t\t\t\t\t\t\t}
+\t\t\t\t\t\t\t\t\tif (差异位置数 === 1 && 旧差异行 === 已删除旧绑定行[0] && 新差异行 === 新增当前行[0]) {
+\t\t\t\t\t\t\t\t\t\t新节点映射[新差异行] = 规范化ProxyIP端点(旧节点映射[旧差异行]);
+\t\t\t\t\t\t\t\t\t}
+\t\t\t\t\t\t\t\t}
+'''
+          if 'const 已删除旧绑定行 = 旧行列表.filter' not in s:
+              if preserve_anchor not in s:
+                  raise SystemExit('backend migration anchor not found')
+              s = s.replace(preserve_anchor, migration + preserve_anchor, 1)
+
+          if s == original:
+              raise SystemExit('no changes produced')
+
+          required = [
+              'function bindCustomLineRenameTracking()',
+              'bindCustomLineRenameTracking();',
+              "const 旧CustomIPs = await env.KV.get('ADD.txt') || '';",
+              'const 已删除旧绑定行 = 旧行列表.filter',
+              '新节点映射[新差异行] = 规范化ProxyIP端点(旧节点映射[旧差异行]);',
+          ]
+          missing = [x for x in required if x not in s]
+          if missing:
+              raise SystemExit('post-patch assertions failed: ' + repr(missing))
+
+          path.write_text(s, encoding='utf-8')
+          PY
+
+          node --check _worker.js
+          npx --yes wrangler@4.129.0 deploy --dry-run
+          git diff --check
+
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/proxyip-rename-binding-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add _worker.js .github/workflows/proxyip-rename-binding-fix.yml
+          git commit -m 'fix: keep ProxyIP binding when custom node name changes'
+          git push origin HEAD:main
