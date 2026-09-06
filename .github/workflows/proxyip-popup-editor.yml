@@ -33,3 +33,4 @@ jobs:
           git add _worker.js .github/workflows/proxyip-popup-editor.yml scripts/patch_proxyip_popup_editor.py
           git commit -m 'feat: edit ProxyIP nodes by stable id in popup'
           git push origin HEAD:main
+# retry after patch-script anchor correction
